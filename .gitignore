@@ -7,3 +7,6 @@ coverage/
 .env.*
 .npmrc
 .DS_Store
+
+# Reference source for coding agents, cloned by `bun run repos:sync`.
+/repos/

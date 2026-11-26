@@ -5,3 +5,7 @@ minimumReleaseAge = 259200
 [lint]
 # Also run the rules that need type information.
 typeAware = true
+
+[test]
+# `repos/` holds other projects' source and test suites, for reference only.
+pathIgnorePatterns = ["repos/**"]

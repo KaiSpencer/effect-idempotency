@@ -21,6 +21,12 @@ bun run build     # bundle src/index.ts into dist/, with declarations
 bun stage         # publish a version the release workflow staged on npm
 ```
 
+`bun install` also clones the Effect source, at the tag of the installed
+version, into `repos/effect`, as reference for coding agents (see
+[AGENTS.md](AGENTS.md)). It is gitignored, skipped in CI, and only warns when
+offline. Run `bun run repos:sync` to update it after changing the Effect
+version.
+
 Relative imports carry the `.ts` extension. `tsconfig.src.json` typechecks
 `src/` without Bun's types, so the library cannot lean on a Bun global.
 

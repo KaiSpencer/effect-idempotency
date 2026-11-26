@@ -1,0 +1,3 @@
+# Read by ripgrep and the search tools built on it, which skip gitignored
+# paths. `repos/` is gitignored but is meant to be searched: see AGENTS.md.
+!/repos/
