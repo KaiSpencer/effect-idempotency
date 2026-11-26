@@ -18,6 +18,7 @@ bun lint --fix    # lint and apply fixes
 bun check         # typecheck
 bun test          # tests
 bun run build     # bundle src/index.ts into dist/, with declarations
+bun stage         # publish a version the release workflow staged on npm
 ```
 
 Relative imports carry the `.ts` extension. `tsconfig.src.json` typechecks
@@ -43,9 +44,10 @@ the file. On `0.x`, a feature or a fix is a `patch` and a breaking change is a
    Ignore the "workflow awaiting approval" notice.
 2. Merging that pull request runs `scripts/release.ts`: it stages the new
    version on npm and creates the GitHub release and tag.
-3. A maintainer approves the staged version with two-factor authentication:
-   `npm stage list effect-idempotency`, then `npm stage approve <stage-id>`.
-   Only then is the version installable.
+3. A maintainer publishes the staged version with two-factor
+   authentication: run `bun stage`, pick the version, and press enter twice.
+   It shows what is staged and checks on npm's automated review until the
+   version is ready. Only then is the version installable.
 
 No npm token is stored anywhere. The release job proves who it is to npm with
 a short-lived OIDC token ([Trusted Publishing](https://docs.npmjs.com/trusted-publishers)),
