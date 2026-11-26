@@ -125,8 +125,8 @@ string and body bytes are the same. The body is compared byte for byte: the
 same JSON with different whitespace is a different request. A retry sends the
 bytes it sent before, so this only rejects a client that reuses a key.
 
-**What is stored.** A response with a status below `400` is stored whole:
-status, headers, cookies and body. It is kept for `retention`, 24 hours by
+**What is stored.** A response with a status below `400` is stored whole, as
+it is sent: status, headers, cookies and body. It is kept for `retention`, 24 hours by
 default, counted from when the handler finished. After that the key is new.
 
 **What is not stored.** Nothing is stored and the key is released when the
@@ -169,8 +169,10 @@ never reaches the store.
   request whose payload is a stream or a multipart upload is not supported.
   See [#3](https://github.com/KaiSpencer/effect-idempotency/issues/3).
 - A change a handler registers to be made to its response later, as
-  `HttpApiBuilder.securitySetCookie` does, is not in the stored response, so a
-  replay lacks it. Set cookies and headers on the response the handler returns.
+  `HttpApiBuilder.securitySetCookie` does, is stored when the response is
+  sent. If the client has gone by then, Effect never makes the change, and the
+  replay is the response as the handler returned it. A cookie or header that a
+  retry must always get belongs on the response the handler returns.
 - A replay does not run the handler, so a permission check inside the handler
   is not repeated. Put checks that must hold on every request in a middleware
   that runs outside this one, as authentication does.

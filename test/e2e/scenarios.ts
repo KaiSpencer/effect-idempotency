@@ -50,6 +50,11 @@ const receipt = HttpClientRequest.post("/payments/receipt").pipe(
   HttpClient.execute,
 );
 
+const checkout = HttpClientRequest.post("/payments/checkout").pipe(
+  HttpClientRequest.setHeaders({ "x-user": "alice", "idempotency-key": "k1" }),
+  HttpClient.execute,
+);
+
 const control = Effect.map(
   HttpApiClient.make(Payments.Api),
   (client) => client.control,
@@ -289,6 +294,39 @@ export const idempotencyScenarios = (
         expect(yield* (yield* create(5, { user: "bob" })).json).toMatchObject({
           id: "pay_2",
         });
+      }));
+
+    test("replays a cookie the handler set through securitySetCookie", () =>
+      Effect.gen(function* () {
+        const first = yield* checkout;
+        const retry = yield* checkout;
+
+        expect(first.headers["set-cookie"]).toContain("last-payment=pay_1");
+        expect(retry.headers["idempotent-replayed"]).toBe("true");
+        expect(retry.headers["set-cookie"]).toBe(first.headers["set-cookie"]);
+        expect(yield* charges).toBe(1);
+      }));
+
+    // Effect only applies such a change when it sends the response. A client
+    // that has already gone never gets that far, so the retry is replayed the
+    // response as the handler returned it. It is still not run a second time.
+    test("replays without that cookie when the first client left before the response", () =>
+      Effect.gen(function* () {
+        yield* hold;
+        const first = yield* Effect.forkChild(checkout);
+        yield* chargesReach(1);
+        yield* Fiber.interrupt(first);
+        yield* resume;
+
+        let retry = yield* checkout;
+        while (retry.status === 409) {
+          yield* Effect.sleep("1 millis");
+          retry = yield* checkout;
+        }
+        expect(retry.headers["idempotent-replayed"]).toBe("true");
+        expect(yield* retry.json).toEqual({ id: "pay_1", amount: 1 });
+        expect(retry.headers["set-cookie"]).toBeUndefined();
+        expect(yield* charges).toBe(1);
       }));
 
     test("sends a streamed response without storing it", () =>

@@ -13,6 +13,7 @@ import {
   HttpApiGroup,
   HttpApiMiddleware,
   HttpApiSchema,
+  HttpApiSecurity,
 } from "effect/http-api";
 import { Idempotency, IdempotencyKey } from "../../src/index.ts";
 
@@ -68,6 +69,10 @@ const PaymentsGroup = HttpApiGroup.make("payments")
     HttpApiEndpoint.post("receipt", "/payments/receipt", {
       headers,
       success: Schema.String.pipe(HttpApiSchema.asText()),
+    }),
+    HttpApiEndpoint.post("checkout", "/payments/checkout", {
+      headers,
+      success: Payment,
     }),
   )
   // The middleware added last runs first, so the user is known by the time
@@ -133,23 +138,37 @@ export class Ledger extends Context.Service<
   );
 }
 
+const lastPayment = HttpApiSecurity.apiKey({
+  in: "cookie",
+  key: "last-payment",
+});
+
 const PaymentsHandlers = HttpApiBuilder.group(
   Api,
   "payments",
   Effect.fnUntraced(function* (handlers) {
     const ledger = yield* Ledger;
-    return handlers
-      .handle("create", ({ payload }) => ledger.charge(payload.amount))
-      .handle("receipt", () =>
-        Effect.map(Effect.orDie(ledger.charge(1)), (payment) =>
-          HttpServerResponse.stream(
-            Stream.encodeText(Stream.make("receipt for ", payment.id)),
-            {
-              contentType: "text/plain",
-            },
+    return (
+      handlers
+        .handle("create", ({ payload }) => ledger.charge(payload.amount))
+        // Sets its cookie the way `securitySetCookie` does: as a change to the
+        // response that Effect makes later, just before sending it.
+        .handle("checkout", () =>
+          Effect.tap(Effect.orDie(ledger.charge(1)), (payment) =>
+            HttpApiBuilder.securitySetCookie(lastPayment, payment.id),
           ),
-        ),
-      );
+        )
+        .handle("receipt", () =>
+          Effect.map(Effect.orDie(ledger.charge(1)), (payment) =>
+            HttpServerResponse.stream(
+              Stream.encodeText(Stream.make("receipt for ", payment.id)),
+              {
+                contentType: "text/plain",
+              },
+            ),
+          ),
+        )
+    );
   }),
 );
 

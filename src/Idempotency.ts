@@ -23,6 +23,7 @@
 import { type Context, Duration, Effect, Exit, Layer } from "effect";
 import { Digest } from "effect/crypto";
 import {
+  HttpEffect,
   type HttpRouter,
   HttpServerRequest,
   HttpServerResponse,
@@ -49,6 +50,18 @@ export const errors = [
 
 /** The type of {@link errors}. */
 export type Errors = typeof errors;
+
+/**
+ * Whether `response` is `returned` with, at most, its headers and cookies
+ * changed. The pre-response handlers also run for another response, when a
+ * middleware outside this one fails or the request is interrupted after the
+ * handler, and that one must not be stored in its place.
+ */
+const isSameResponse = (
+  response: HttpServerResponse.HttpServerResponse,
+  returned: HttpServerResponse.HttpServerResponse,
+): boolean =>
+  response.status === returned.status && response.body === returned.body;
 
 /** The header a replayed response carries, with the value `true`. */
 export const replayedHeader = "idempotent-replayed";
@@ -117,6 +130,10 @@ export interface Options<Requires> {
  * Once a request has claimed its key the middleware does not let it be
  * interrupted, so a client that timed out and disconnected finds the response
  * stored when it retries. A handler that can hang needs its own timeout.
+ *
+ * The response is stored as it is sent, with any change the handler
+ * registered for it, such as `HttpApiBuilder.securitySetCookie`. If the client
+ * has gone by then, it is stored as the handler returned it.
  *
  * A response whose body is not bytes in memory, such as a stream or a file,
  * is sent but not stored.
@@ -192,26 +209,57 @@ export const layer = <Id, Requires>(
                 yield* release;
                 return yield* Effect.failCause(exit.cause);
               }
+              const returned = exit.value;
               // An error response is not stored either. `HttpApi` answers some
               // request errors, such as an unsupported content type, with a
               // response and not with a failure.
-              const stored =
-                exit.value.status < 400
-                  ? StoredResponse.fromResponse(exit.value)
-                  : undefined;
-              if (stored === undefined) {
+              if (
+                returned.status >= 400 ||
+                !StoredResponse.canStore(returned)
+              ) {
                 yield* release;
-                return exit.value;
+                return returned;
               }
-              yield* Effect.catchCause(
-                store.complete(result.claim, stored, retention),
-                (cause) =>
-                  Effect.logError(
-                    "effect-idempotency: could not store the response",
-                    cause,
+
+              // The response is stored once, as late as the request allows. A
+              // handler can register a change to be made to its response just
+              // before it is sent, as `HttpApiBuilder.securitySetCookie` does,
+              // and a replay has to carry that change. So the response is
+              // stored from a pre-response handler of our own, which runs
+              // after those. If the request ends before that stage, because
+              // the client has gone, the finalizer stores what the handler
+              // returned.
+              let settled = false;
+              const complete = (
+                response: HttpServerResponse.HttpServerResponse,
+              ) =>
+                Effect.suspend(() => {
+                  if (settled) return Effect.void;
+                  settled = true;
+                  const stored = StoredResponse.fromResponse(response);
+                  return stored === undefined
+                    ? release
+                    : Effect.catchCause(
+                        store.complete(result.claim, stored, retention),
+                        (cause) =>
+                          Effect.logError(
+                            "effect-idempotency: could not store the response",
+                            cause,
+                          ),
+                      );
+                });
+              yield* Effect.addFinalizer(() => complete(returned));
+              yield* HttpEffect.appendPreResponseHandler((_request, response) =>
+                Effect.as(
+                  Effect.uninterruptible(
+                    complete(
+                      isSameResponse(response, returned) ? response : returned,
+                    ),
                   ),
+                  response,
+                ),
               );
-              return exit.value;
+              return returned;
             }),
           );
         }),

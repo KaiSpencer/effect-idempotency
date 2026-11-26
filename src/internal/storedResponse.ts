@@ -2,8 +2,17 @@ import { Cookies, HttpServerResponse } from "effect/http";
 import type { StoredResponse } from "../IdempotencyStore.ts";
 
 /**
+ * Whether a response can be stored: its body is already bytes in memory, and
+ * not a stream, a file or form data.
+ */
+export const canStore = (
+  response: HttpServerResponse.HttpServerResponse,
+): boolean =>
+  response.body._tag === "Empty" || response.body._tag === "Uint8Array";
+
+/**
  * Copies a response into the form the store keeps. Returns `undefined` for a
- * body that is not already bytes in memory: a stream, a file, form data.
+ * response that {@link canStore} refuses.
  */
 export const fromResponse = (
   response: HttpServerResponse.HttpServerResponse,
