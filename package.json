@@ -1,6 +1,6 @@
 {
   "name": "effect-idempotency",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "Idempotency-Key handling for Effect's HttpApi: server and client middleware. In development.",
   "license": "MIT",
   "author": "KaiSpencer",
