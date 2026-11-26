@@ -25,6 +25,10 @@ Relative imports carry the `.ts` extension. `tsconfig.src.json` typechecks
 
 ## Changes
 
+`main` is protected: every change arrives through a pull request, and the
+`check` job of `ci.yml` must pass on it. A workflow run on a pull request from
+a fork waits for a maintainer's approval.
+
 A change users can see adds a changeset: run `bun run changeset` and commit
 the file. On `0.x`, a feature or a fix is a `patch` and a breaking change is a
 `minor`.
@@ -35,7 +39,8 @@ the file. On `0.x`, a feature or a fix is a `patch` and a breaking change is a
    named "chore: version packages", which bumps the version and writes
    `CHANGELOG.md`. GitHub holds that pull request's own checks for approval,
    because a workflow opened it, so the release job dispatches `ci.yml` on
-   its branch instead. Ignore the "workflow awaiting approval" notice.
+   its branch instead, which reports the `check` status the merge needs.
+   Ignore the "workflow awaiting approval" notice.
 2. Merging that pull request runs `scripts/release.ts`: it stages the new
    version on npm and creates the GitHub release and tag.
 3. A maintainer approves the staged version with two-factor authentication:
