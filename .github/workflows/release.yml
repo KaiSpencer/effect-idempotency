@@ -55,7 +55,8 @@ jobs:
           NPM_PUBLISH: ${{ vars.NPM_PUBLISH }}
       # GitHub holds the pull_request runs of a pull request opened with
       # GITHUB_TOKEN until a maintainer approves them. A dispatched run needs
-      # no approval, and its checks land on the same commit.
+      # no approval, and ci.yml reports its result as the `check` status that
+      # main requires.
       - if: steps.changesets.outputs.has-changesets == 'true'
         run: gh workflow run ci.yml --ref changeset-release/main
         env:
