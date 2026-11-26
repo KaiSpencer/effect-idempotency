@@ -37,7 +37,13 @@ const invalid = (message: string) =>
 /** Reads a Structured Field string, or returns a bare value as it is. */
 const unquote = (value: string): Effect.Effect<string, SchemaIssue.Issue> => {
   const trimmed = value.trim();
-  if (!trimmed.startsWith('"')) return Effect.succeed(trimmed);
+  if (!trimmed.startsWith('"')) {
+    // Two `Idempotency-Key` headers arrive joined by a comma, and which key
+    // was meant cannot be told.
+    return trimmed.includes(",")
+      ? invalid("Expected one key: a key with a comma must be quoted")
+      : Effect.succeed(trimmed);
+  }
   if (trimmed.length < 2 || !trimmed.endsWith('"')) {
     return invalid("Expected a quoted string to end with a quote");
   }
@@ -69,7 +75,8 @@ const quote = (key: string): string => `"${key.replace(/["\\]/g, "\\$&")}"`;
  *
  * Decoding accepts the value in double quotes, which is the Structured Field
  * string the IETF draft defines, and bare, as most clients send it. Both give
- * the same key. Encoding writes the quoted form.
+ * the same key. A bare value cannot contain a comma, because two headers
+ * arrive joined by one. Encoding writes the quoted form.
  *
  * Use it for the header in an endpoint definition, so the header is in the
  * OpenAPI document and a generated client can send it:
@@ -93,8 +100,8 @@ const decodeHeader = Schema.decodeOption(FromHeader);
  * Reads the key out of an `Idempotency-Key` header value, quoted or bare.
  *
  * Returns `undefined` for an empty value, a value outside printable ASCII, a
- * quoted string that is not well formed, or a key longer than
- * {@link maxLength}. {@link FromHeader} is the same reading as a schema.
+ * bare value with a comma, a quoted string that is not well formed, or a key
+ * longer than {@link maxLength}. {@link FromHeader} is the same reading as a schema.
  */
 export const parse = (value: string): IdempotencyKey | undefined =>
   Option.getOrUndefined(decodeHeader(value));

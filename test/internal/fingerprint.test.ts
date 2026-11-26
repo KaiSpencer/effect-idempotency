@@ -34,6 +34,30 @@ describe("Fingerprint", () => {
     }),
   );
 
+  it.effect.each([
+    ["scheme", "https://localhost/payments?currency=eur"],
+    ["host", "http://api.example/payments?currency=eur"],
+    ["port", "http://localhost:8080/payments?currency=eur"],
+  ] as const)("does not change with the scheme, host or port", ([, url]) =>
+    Effect.gen(function* () {
+      expect(yield* fingerprint({ url })).toBe(yield* fingerprint());
+    }),
+  );
+
+  it.effect(
+    "keeps the path the client asked for when a router rewrites the url",
+    () =>
+      Effect.gen(function* () {
+        const mounted = request().modify({ url: "/?currency=eur" });
+        expect(
+          yield* Effect.provide(
+            Fingerprint.make(mounted),
+            Digest.layerWebCrypto,
+          ),
+        ).toBe(yield* fingerprint());
+      }),
+  );
+
   it.effect("leaves the body for the handler to read", () =>
     Effect.gen(function* () {
       const incoming = request();

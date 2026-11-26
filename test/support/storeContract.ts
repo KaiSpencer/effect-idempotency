@@ -128,12 +128,21 @@ export const storeContract = (
         expect((yield* claim("k"))._tag).toBe("Claimed");
       }));
 
-    test("ignores the completion of a claim whose lock expired", () =>
+    test("stores a completion that comes after the lock expired, if nobody took the key", () =>
       Effect.gen(function* () {
         const store = yield* IdempotencyStore.IdempotencyStore;
         const first = yield* claimed("k");
-        yield* TestClock.adjust(lockExpiry);
+        yield* TestClock.adjust(Duration.times(lockExpiry, 3));
         yield* store.complete(first, response, retention);
+        expect((yield* claim("k"))._tag).toBe("Completed");
+      }));
+
+    test("releases a claim whose lock expired, if nobody took the key", () =>
+      Effect.gen(function* () {
+        const store = yield* IdempotencyStore.IdempotencyStore;
+        const first = yield* claimed("k");
+        yield* TestClock.adjust(Duration.times(lockExpiry, 3));
+        yield* store.release(first);
         expect((yield* claim("k"))._tag).toBe("Claimed");
       }));
 
@@ -153,10 +162,12 @@ export const storeContract = (
         expect((yield* claim("k"))._tag).toBe("Completed");
       }));
 
-    test("keeps a response for the retention, then frees the key", () =>
+    test("keeps a response for the retention, counted from its completion", () =>
       Effect.gen(function* () {
         const store = yield* IdempotencyStore.IdempotencyStore;
-        yield* store.complete(yield* claimed("k"), response, retention);
+        const first = yield* claimed("k");
+        yield* TestClock.adjust("1 minute");
+        yield* store.complete(first, response, retention);
         yield* TestClock.adjust(
           Duration.subtract(retention, Duration.millis(1)),
         );

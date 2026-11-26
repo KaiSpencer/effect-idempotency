@@ -26,10 +26,23 @@ describe("StoredResponse", () => {
   });
 
   test("restores a response without a body", async () => {
-    const restored = roundTrip(HttpServerResponse.empty({ status: 204 }));
+    const restored = roundTrip(
+      HttpServerResponse.empty({ status: 204, statusText: "Nothing To Say" }),
+    );
 
     expect(restored.status).toBe(204);
+    expect(restored.statusText).toBe("Nothing To Say");
     expect(await restored.text()).toBe("");
+  });
+
+  test("keeps its own copy of the body", () => {
+    const bytes = new TextEncoder().encode("first");
+    const stored = StoredResponse.fromResponse(
+      HttpServerResponse.uint8Array(bytes),
+    );
+    bytes.fill(0);
+
+    expect(new TextDecoder().decode(stored?.body)).toBe("first");
   });
 
   test("restores cookies", () => {

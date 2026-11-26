@@ -19,9 +19,12 @@ import {
   type TestServices,
 } from "./support/EffectTest.ts";
 
-const environment = (store: Layer.Layer<IdempotencyStore.IdempotencyStore>) =>
+const environment = (
+  store: Layer.Layer<IdempotencyStore.IdempotencyStore>,
+  options?: Parameters<typeof Payments.layerWith>[0],
+) =>
   Layer.mergeAll(
-    Payments.layer.pipe(Layer.provide(store)),
+    Payments.layerWith(options).pipe(Layer.provide(store)),
     HttpServer.layerServices,
   );
 
@@ -48,6 +51,15 @@ const create = (
 };
 
 const charges = Effect.flatMap(Payments.Ledger, (ledger) => ledger.charges);
+
+/**
+ * Makes charges wait until `resume`, or until the test ends: a failed
+ * assertion must not leave a charge waiting, because the request around it
+ * cannot be interrupted.
+ */
+const holdCharges = Effect.flatMap(Payments.Ledger, (ledger) =>
+  Effect.acquireRelease(ledger.hold, () => ledger.resume),
+);
 
 const withMemoryStore = environment(IdempotencyStore.layerMemory);
 
@@ -110,7 +122,7 @@ describe("Idempotency", () => {
   test("fails while the first request is still running, then replays it", () =>
     Effect.gen(function* () {
       const ledger = yield* Payments.Ledger;
-      yield* ledger.hold;
+      yield* holdCharges;
       const first = yield* Effect.forkChild(create(5));
       yield* ledger.held;
 
@@ -126,7 +138,7 @@ describe("Idempotency", () => {
   test("reports a different request before a running one", () =>
     Effect.gen(function* () {
       const ledger = yield* Payments.Ledger;
-      yield* ledger.hold;
+      yield* holdCharges;
       const first = yield* Effect.forkChild(create(5));
       yield* ledger.held;
 
@@ -155,7 +167,7 @@ describe("Idempotency", () => {
   test("finishes the handler and stores its response when the request is interrupted", () =>
     Effect.gen(function* () {
       const ledger = yield* Payments.Ledger;
-      yield* ledger.hold;
+      yield* holdCharges;
       const first = yield* Effect.forkChild(create(5));
       yield* ledger.held;
       const interruption = yield* Effect.forkChild(Fiber.interrupt(first));
@@ -166,6 +178,20 @@ describe("Idempotency", () => {
       yield* ledger.resume;
       yield* Fiber.join(interruption);
 
+      expect((yield* create(5)).id).toBe("pay_1");
+      expect(yield* charges).toBe(1);
+    }));
+
+  test("stores the response of a handler that outlives the lock expiry", () =>
+    Effect.gen(function* () {
+      const ledger = yield* Payments.Ledger;
+      yield* holdCharges;
+      const first = yield* Effect.forkChild(create(5));
+      yield* ledger.held;
+      yield* TestClock.adjust("1 hour");
+      yield* ledger.resume;
+
+      expect((yield* Fiber.join(first)).id).toBe("pay_1");
       expect((yield* create(5)).id).toBe("pay_1");
       expect(yield* charges).toBe(1);
     }));
@@ -199,6 +225,57 @@ describe("Idempotency", () => {
       );
       expect(error._tag).toBe("Unauthenticated");
     }));
+});
+
+describe("Idempotency options", () => {
+  it.effect("replays for the retention it is given", () =>
+    Effect.gen(function* () {
+      yield* create(5);
+      yield* TestClock.adjust("59 seconds");
+      expect((yield* create(5)).id).toBe("pay_1");
+      yield* TestClock.adjust("1 second");
+      expect((yield* create(5)).id).toBe("pay_2");
+    }).pipe(
+      Effect.provide(
+        environment(IdempotencyStore.layerMemory, { retention: "1 minute" }),
+      ),
+    ),
+  );
+
+  it.effect(
+    "holds a key for the lock expiry it is given, then lets a retry take it",
+    () =>
+      Effect.gen(function* () {
+        const ledger = yield* Payments.Ledger;
+        yield* holdCharges;
+        const first = yield* Effect.forkChild(create(5));
+        yield* ledger.held;
+
+        yield* TestClock.adjust("9 seconds");
+        expect((yield* Effect.flip(create(5)))._tag).toBe(
+          "IdempotencyKeyInProgress",
+        );
+
+        // Past the lock expiry the retry takes the key and runs the handler too.
+        yield* TestClock.adjust("1 second");
+        yield* ledger.hold;
+        const retry = yield* Effect.forkChild(create(5));
+        yield* ledger.held;
+        expect(yield* charges).toBe(2);
+
+        yield* ledger.resume;
+        expect((yield* Fiber.join(first)).id).toBe("pay_1");
+        expect((yield* Fiber.join(retry)).id).toBe("pay_2");
+        // The retry's claim voided the first one, so its response is the one kept.
+        expect((yield* create(5)).id).toBe("pay_2");
+      }).pipe(
+        Effect.provide(
+          environment(IdempotencyStore.layerMemory, {
+            lockExpiry: "10 seconds",
+          }),
+        ),
+      ),
+  );
 });
 
 describe("Idempotency in OpenAPI", () => {

@@ -84,8 +84,10 @@ export class IdempotencyStore extends Context.Service<
      * Claims the key if it is free. This must be atomic: of any number of
      * concurrent claims for a free key, exactly one gets `Claimed`.
      *
-     * A claim lasts for `lockExpiry`. If it is neither completed nor released
-     * by then, the key is free again and the claim is void.
+     * A claim holds the key for `lockExpiry`. After that the key can be
+     * claimed again, and the new claim voids the old one. Until then, and
+     * for as long as nobody claims the key again, the claim can still be
+     * completed or released.
      *
      * When the key is taken, the result carries the fingerprint the key was
      * claimed with.
@@ -97,8 +99,9 @@ export class IdempotencyStore extends Context.Service<
       readonly lockExpiry: Duration.Duration;
     }) => Effect.Effect<ClaimResult, IdempotencyStoreError>;
     /**
-     * Stores the response for a claim and keeps it for `retention`, after
-     * which the key is free again. Does nothing if the claim is void.
+     * Stores the response for a claim and keeps it for `retention`, counted
+     * from now, after which the key is free again. Does nothing if the claim
+     * is void.
      */
     readonly complete: (
       claim: Claim,

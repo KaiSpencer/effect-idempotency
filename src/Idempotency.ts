@@ -5,15 +5,16 @@
  * that need it, and provide it with {@link layer}:
  *
  * ```ts
- * class PaymentIdempotency extends Idempotency.Service<PaymentIdempotency>()(
- *   "app/PaymentIdempotency",
- * ) {}
+ * class PaymentIdempotency extends Idempotency.Service<
+ *   PaymentIdempotency,
+ *   { requires: CurrentUser }
+ * >()("app/PaymentIdempotency") {}
  *
  * const create = HttpApiEndpoint.post("create", "/payments", { ... })
  *   .middleware(PaymentIdempotency)
  *
  * const PaymentIdempotencyLive = Idempotency.layer(PaymentIdempotency, {
- *   scope: Effect.succeed("payments"),
+ *   scope: Effect.map(CurrentUser, (user) => user.id),
  * }).pipe(Layer.provide(IdempotencyStore.layerMemory))
  * ```
  *
@@ -77,16 +78,20 @@ export interface Options<Requires> {
   /**
    * Who a key belongs to, read once per request. A key is unique within its
    * scope, so two callers that send the same key do not see each other's
-   * responses. Return the caller's id on an API with accounts, and a constant
-   * on one without.
+   * responses. Return the caller's id on an API with accounts.
+   *
+   * With a constant scope, every caller shares one set of keys: whoever sends
+   * a key and request that were used before gets the stored response, cookies
+   * included. Only use one on an API where that is acceptable.
    */
   readonly scope: Effect.Effect<string, never, Requires | HttpRouter.Provided>;
   /** How long a stored response is replayed. Defaults to 24 hours. */
   readonly retention?: Duration.Input | undefined;
   /**
-   * How long a request may hold a key before the key is free again. It
-   * matters when a process dies mid-request, and must be longer than the
-   * slowest handler. Defaults to 5 minutes.
+   * How long a request may hold a key before another request may take it.
+   * It matters when a process dies mid-request. Make it longer than the
+   * slowest handler: a retry that arrives after it runs the handler again,
+   * alongside the first request. Defaults to 5 minutes.
    */
   readonly lockExpiry?: Duration.Input | undefined;
 }
@@ -99,9 +104,9 @@ export interface Options<Requires> {
  *
  * - No `Idempotency-Key` header fails with `IdempotencyKeyMissing`, and one
  *   that is not a valid key with `IdempotencyKeyInvalid`.
- * - A new key runs the handler. If it succeeds, the response is stored and
- *   sent. If it fails or dies, the key is released and the next request with
- *   it runs the handler again.
+ * - A new key runs the handler. If it succeeds with a status below 400, the
+ *   response is stored and sent. If it fails, dies, or answers 400 or above,
+ *   the key is released and the next request with it runs the handler again.
  * - A key used before with a different request fails with
  *   `IdempotencyKeyMismatch`.
  * - A key whose first request is still running fails with
@@ -109,11 +114,12 @@ export interface Options<Requires> {
  * - A key whose first request succeeded gets the stored response, with the
  *   `Idempotent-Replayed: true` header added.
  *
- * Once a request has claimed its key it runs to the end, even if the client
- * disconnects or the server is shutting down, so a client that timed out
- * finds the response stored when it retries.
+ * Once a request has claimed its key the middleware does not let it be
+ * interrupted, so a client that timed out and disconnected finds the response
+ * stored when it retries. A handler that can hang needs its own timeout.
  *
- * A response whose body is a stream is sent but not stored.
+ * A response whose body is not bytes in memory, such as a stream or a file,
+ * is sent but not stored.
  *
  * If the store fails to claim the key, the request dies and the handler does
  * not run. If it fails to store a response, the response is still sent and
@@ -186,7 +192,13 @@ export const layer = <Id, Requires>(
                 yield* release;
                 return yield* Effect.failCause(exit.cause);
               }
-              const stored = StoredResponse.fromResponse(exit.value);
+              // An error response is not stored either. `HttpApi` answers some
+              // request errors, such as an unsupported content type, with a
+              // response and not with a failure.
+              const stored =
+                exit.value.status < 400
+                  ? StoredResponse.fromResponse(exit.value)
+                  : undefined;
               if (stored === undefined) {
                 yield* release;
                 return exit.value;

@@ -8,22 +8,50 @@ import { storeContract } from "./support/storeContract.ts";
 storeContract("layerMemory", IdempotencyStore.layerMemory);
 
 describe("layerMemory", () => {
-  it.effect("removes expired entries whose keys are never claimed again", () =>
+  const setup = Effect.map(memoryStore.makeWithSize, ({ size, store }) => ({
+    size,
+    store,
+    claim: (key: string) =>
+      store.claim({
+        scope: "scope",
+        key: IdempotencyKey.IdempotencyKey.make(key),
+        fingerprint: IdempotencyStore.Fingerprint.make("fingerprint"),
+        lockExpiry: Duration.seconds(1),
+      }),
+  }));
+  const response: IdempotencyStore.StoredResponse = {
+    status: 200,
+    headers: {},
+    cookies: [],
+  };
+
+  it.effect(
+    "removes expired responses whose keys are never claimed again",
+    () =>
+      Effect.gen(function* () {
+        const { claim, size, store } = yield* setup;
+        for (const key of ["a", "b", "c"]) {
+          const result = yield* claim(key);
+          if (result._tag === "Claimed") {
+            yield* store.complete(result.claim, response, Duration.seconds(1));
+          }
+        }
+        expect(yield* size).toBe(3);
+
+        yield* TestClock.adjust(memoryStore.sweepInterval);
+        yield* claim("d");
+        expect(yield* size).toBe(1);
+      }),
+  );
+
+  it.effect("keeps an expired claim, whose request may still complete it", () =>
     Effect.gen(function* () {
-      const { size, store } = yield* memoryStore.makeWithSize;
-      const claim = (key: string) =>
-        store.claim({
-          scope: "scope",
-          key: IdempotencyKey.IdempotencyKey.make(key),
-          fingerprint: IdempotencyStore.Fingerprint.make("fingerprint"),
-          lockExpiry: Duration.seconds(1),
-        });
-      yield* Effect.forEach(["a", "b", "c"], claim);
-      expect(yield* size).toBe(3);
+      const { claim, size } = yield* setup;
+      yield* claim("a");
 
       yield* TestClock.adjust(memoryStore.sweepInterval);
-      yield* claim("d");
-      expect(yield* size).toBe(1);
+      yield* claim("b");
+      expect(yield* size).toBe(2);
     }),
   );
 });

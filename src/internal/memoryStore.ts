@@ -36,23 +36,27 @@ export const makeWithSize: Effect.Effect<{
   let tokens = 0;
   let nextSweep = 0;
 
-  // An expired entry is otherwise only removed when its key is claimed
-  // again, and most keys never are.
+  // An expired response is otherwise only removed when its key is claimed
+  // again, and most keys never are. An expired claim stays: its request is
+  // still running and may yet complete it.
   const sweep = (now: number): void => {
     if (now < nextSweep) return;
     nextSweep = now + sweepInterval;
     for (const [id, entry] of entries) {
-      if (entry.expiresAt <= now) entries.delete(id);
+      if (entry.response !== undefined && entry.expiresAt <= now)
+        entries.delete(id);
     }
   };
 
-  /** The entry a claim still owns, if its lock has not expired. */
-  const owned = (claim: Claim, now: number): Entry | undefined => {
+  /**
+   * The entry a claim still owns: nobody has claimed the key since. A claim
+   * past its lock expiry still owns its entry until then.
+   */
+  const owned = (claim: Claim): Entry | undefined => {
     const entry = entries.get(entryId(claim.scope, claim.key));
     return entry !== undefined &&
       entry.token === claim.token &&
-      entry.response === undefined &&
-      entry.expiresAt > now
+      entry.response === undefined
       ? entry
       : undefined;
   };
@@ -85,7 +89,7 @@ export const makeWithSize: Effect.Effect<{
         }),
       complete: (claim, response, retention) =>
         Effect.map(Clock.currentTimeMillis, (now) => {
-          const entry = owned(claim, now);
+          const entry = owned(claim);
           if (entry === undefined) return;
           entries.set(entryId(claim.scope, claim.key), {
             ...entry,
@@ -94,8 +98,8 @@ export const makeWithSize: Effect.Effect<{
           });
         }),
       release: (claim) =>
-        Effect.map(Clock.currentTimeMillis, (now) => {
-          if (owned(claim, now) !== undefined)
+        Effect.sync(() => {
+          if (owned(claim) !== undefined)
             entries.delete(entryId(claim.scope, claim.key));
         }),
     },

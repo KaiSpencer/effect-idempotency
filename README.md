@@ -77,19 +77,18 @@ document and makes a generated client ask for it. The client takes an
 checks, and sends it in the quoted form:
 
 ```ts
-yield *
-  client.payments.create({
-    headers: {
-      "idempotency-key": IdempotencyKey.IdempotencyKey.make(
-        crypto.randomUUID(),
-      ),
-    },
+const pay = Effect.gen(function* () {
+  const client = yield* HttpApiClient.make(Api);
+  const key = IdempotencyKey.IdempotencyKey.make(crypto.randomUUID());
+  return yield* client.payments.create({
+    headers: { "idempotency-key": key },
     payload: { amount: 5 },
   });
+});
 ```
 
-`requires` names the services the scope reads. Leave it out and return a
-constant, such as `Effect.succeed("public")`, on an API without accounts.
+`requires` names the services the scope reads. Leave it out when the scope
+reads none.
 
 ## Behaviour
 
@@ -106,43 +105,54 @@ behaviour where Stripe documents one.
 | A key used before with a different request | `422`                                                 |
 | A key whose first request is still running | `409`                                                 |
 | A key whose first request succeeded        | The stored response, with `Idempotent-Replayed: true` |
-| A key whose first request failed or died   | The handler runs again                                |
+| A key whose first request did not succeed  | The handler runs again                                |
 
 **The key.** The header value is accepted quoted, as the draft's
 structured-field syntax requires, and bare, as most clients send it. Both give
-the same key. A key is printable ASCII and at most 255 characters.
+the same key. A key is printable ASCII and at most 255 characters. A bare key
+cannot contain a comma: two `Idempotency-Key` headers arrive joined by one, and
+are refused. Quote a key that has one.
 
 **Scope.** A key is unique within the scope the `scope` option returns for the
 request. With the caller's id as the scope, two callers that send the same key
 never see each other's responses. The option is required so that sharing keys
-between all callers is a choice and not a default.
+between all callers is a choice and not a default. With a constant scope, such
+as `Effect.succeed("public")`, whoever sends a key and request that were used
+before gets the stored response, cookies included.
 
 **The same request.** Two requests are the same when their method, path, query
 string and body bytes are the same. The body is compared byte for byte: the
 same JSON with different whitespace is a different request. A retry sends the
 bytes it sent before, so this only rejects a client that reuses a key.
 
-**What is stored.** A response the handler succeeds with is stored whole:
+**What is stored.** A response with a status below `400` is stored whole:
 status, headers, cookies and body. It is kept for `retention`, 24 hours by
 default, counted from when the handler finished. After that the key is new.
 
-**What is not stored.** When the handler fails with one of its errors, fails
-validation, or dies, nothing is stored and the key is released. The next
-request with the key runs the handler again. A handler that fails must
-therefore leave nothing behind, or leave only what a second run can repeat.
+**What is not stored.** Nothing is stored and the key is released when the
+handler fails with one of its errors, dies, or answers `400` or above, and
+when the request is refused before the handler, as one that fails validation
+or has an unsupported content type is. The next request with the key runs the
+handler again. A handler that fails must therefore leave nothing behind, or
+leave only what a second run can repeat.
 
-**A client that disconnects.** Once a request has claimed its key it runs to
-the end: a disconnect does not interrupt the handler, and shutdown waits for
-it. A client that timed out gets `409` while the handler is still running and
-the stored response after. Without this, the disconnect would stop the handler
-part way and the retry would run its side effect a second time.
+**A client that disconnects.** Once a request has claimed its key the
+middleware does not let it be interrupted, so a disconnect does not stop the
+handler. A client that timed out gets `409` while the handler is still running
+and the stored response after. Without this, the disconnect would stop the
+handler part way and the retry would run its side effect a second time.
+
+The same holds at shutdown: the server cannot interrupt the request, and one
+that waits for requests in flight waits for these until their handlers finish.
+Give a handler that can hang its own `Effect.timeout`, which still works.
 
 **A process that dies.** A request holds its key for `lockExpiry`, 5 minutes by
-default. If the process dies mid-request, the key is free again after that and
-a retry runs the handler again. Set `lockExpiry` longer than the slowest
-handler, because a retry that arrives after it runs alongside the first
-request. Until the transactional mode below exists, a crash between the side
-effect and the stored response means the side effect can happen twice.
+default. If the process dies mid-request, another request can take the key
+after that and run the handler again. Set `lockExpiry` longer than the slowest
+handler: a handler that outlives it still stores its response, but a retry
+that arrives in the meantime takes the key and runs alongside it. Until the
+transactional mode below exists, a crash between the side effect and the
+stored response means the side effect can happen twice.
 
 **A store that fails.** If the key cannot be claimed, the request answers `500`
 and the handler does not run. If the response cannot be stored, it is still
@@ -154,11 +164,20 @@ never reaches the store.
 
 ### Limits
 
-- A response whose body is a stream is sent but not stored, so a retry runs
-  the handler again. A request whose payload is a stream or a multipart upload
-  is not supported. See [#3](https://github.com/KaiSpencer/effect-idempotency/issues/3).
+- A response whose body is not bytes in memory, such as a stream, a file or
+  form data, is sent but not stored, so a retry runs the handler again. A
+  request whose payload is a stream or a multipart upload is not supported.
+  See [#3](https://github.com/KaiSpencer/effect-idempotency/issues/3).
+- A change a handler registers to be made to its response later, as
+  `HttpApiBuilder.securitySetCookie` does, is not in the stored response, so a
+  replay lacks it. Set cookies and headers on the response the handler returns.
+- A replay does not run the handler, so a permission check inside the handler
+  is not repeated. Put checks that must hold on every request in a middleware
+  that runs outside this one, as authentication does.
 - `IdempotencyStore.layerMemory` lives in one process and is lost on restart.
-  It suits tests, development, and a server that runs as one process.
+  It has no size limit: every stored response stays in memory for the
+  retention. It suits tests, development, and a small server that runs as one
+  process.
 
 ## Errors
 

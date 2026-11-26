@@ -22,17 +22,24 @@ const problemType = (name: string) =>
 /** Creates a payment as `alice` with the key `k1` unless told otherwise. */
 const create = (
   amount: number,
-  options?: { key?: string | undefined; user?: string; body?: string },
+  options?: {
+    key?: string | undefined;
+    user?: string;
+    body?: string;
+    contentType?: string;
+    host?: string;
+  },
 ) => {
   const key = options !== undefined && "key" in options ? options.key : "k1";
   return HttpClientRequest.post("/payments").pipe(
     HttpClientRequest.setHeaders({
       "x-user": options?.user ?? "alice",
       ...(key === undefined ? {} : { "idempotency-key": key }),
+      ...(options?.host === undefined ? {} : { host: options.host }),
     }),
     HttpClientRequest.bodyText(
       options?.body ?? JSON.stringify({ amount }),
-      "application/json",
+      options?.contentType ?? "application/json",
     ),
     HttpClient.execute,
   );
@@ -149,6 +156,16 @@ export const idempotencyScenarios = (
         expect(response.status).toBe(422);
       }));
 
+    test("treats the same request through another host name as a retry", () =>
+      Effect.gen(function* () {
+        yield* create(5, { host: "a.example" });
+        const retry = yield* create(5, { host: "b.example" });
+
+        expect(retry.status).toBe(200);
+        expect(retry.headers["idempotent-replayed"]).toBe("true");
+        expect(yield* charges).toBe(1);
+      }));
+
     test("answers 409 while the first request is running, then replays it", () =>
       Effect.gen(function* () {
         yield* hold;
@@ -228,6 +245,40 @@ export const idempotencyScenarios = (
         expect((yield* create(0)).status).toBe(500);
         expect((yield* create(0)).status).toBe(500);
         expect(yield* charges).toBe(2);
+      }));
+
+    test("does not store a request the API refuses before the handler", () =>
+      Effect.gen(function* () {
+        const refused = yield* create(5, { contentType: "text/plain" });
+        expect(refused.status).toBe(415);
+
+        // The same key and bytes, corrected, are not answered with the 415.
+        const corrected = yield* create(5);
+        expect(corrected.status).toBe(200);
+        expect(corrected.headers["idempotent-replayed"]).toBeUndefined();
+        expect(yield* charges).toBe(1);
+      }));
+
+    test("does not store a request that fails validation", () =>
+      Effect.gen(function* () {
+        const first = yield* create(5, { body: '{"amount":"five"}' });
+        const retry = yield* create(5, { body: '{"amount":"five"}' });
+
+        expect(first.status).toBe(400);
+        expect(retry.status).toBe(400);
+        expect(retry.headers["idempotent-replayed"]).toBeUndefined();
+        expect(yield* charges).toBe(0);
+      }));
+
+    test("answers 400 to two key headers", () =>
+      Effect.gen(function* () {
+        const response = yield* create(5, { key: "k1, k2" });
+
+        expect(response.status).toBe(400);
+        expect(yield* response.json).toMatchObject({
+          type: problemType("idempotency-key-invalid"),
+        });
+        expect(yield* charges).toBe(0);
       }));
 
     test("keeps the same key of two users apart", () =>

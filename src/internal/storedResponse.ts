@@ -15,7 +15,8 @@ export const fromResponse = (
     statusText: response.statusText,
     headers: { ...response.headers },
     cookies: Cookies.toSetCookieHeaders(response.cookies),
-    body: body._tag === "Empty" ? undefined : body.body,
+    // A copy: the handler still holds the original and could write to it.
+    body: body._tag === "Empty" ? undefined : new Uint8Array(body.body),
   };
 };
 

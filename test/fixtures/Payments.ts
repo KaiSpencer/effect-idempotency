@@ -174,17 +174,25 @@ const AuthenticationLive = Layer.succeed(Authentication, (httpEffect) =>
   }),
 );
 
-const PaymentIdempotencyLive = Idempotency.layer(PaymentIdempotency, {
-  scope: Effect.map(CurrentUser, (user) => user.id),
-});
-
 /**
  * The handlers and middleware of the API, with the ledger left in the output
  * so a test can read it. The store comes from the caller.
  */
-export const layer = Layer.mergeAll(PaymentsHandlers, ControlHandlers).pipe(
-  Layer.provideMerge(
-    Layer.mergeAll(AuthenticationLive, PaymentIdempotencyLive),
-  ),
-  Layer.provideMerge(Ledger.layer),
-);
+export const layerWith = (
+  options?: Pick<Idempotency.Options<CurrentUser>, "retention" | "lockExpiry">,
+) =>
+  Layer.mergeAll(PaymentsHandlers, ControlHandlers).pipe(
+    Layer.provideMerge(
+      Layer.mergeAll(
+        AuthenticationLive,
+        Idempotency.layer(PaymentIdempotency, {
+          scope: Effect.map(CurrentUser, (user) => user.id),
+          ...options,
+        }),
+      ),
+    ),
+    Layer.provideMerge(Ledger.layer),
+  );
+
+/** {@link layerWith} the default retention and lock expiry. */
+export const layer = layerWith();

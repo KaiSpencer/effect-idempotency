@@ -17,6 +17,10 @@ describe("IdempotencyKey.parse", () => {
     expect(parse(" 8e03978e-40d5 ")).toBe("8e03978e-40d5");
   });
 
+  test("reads a comma inside a quoted string", () => {
+    expect(parse('"k1, k2"')).toBe("k1, k2");
+  });
+
   test("unescapes a quote and a backslash", () => {
     expect(parse('"a\\"b\\\\c"')).toBe('a"b\\c');
   });
@@ -38,6 +42,7 @@ describe("IdempotencyKey.parse", () => {
     ["escape that swallows the closing quote", '"abc\\"'],
     ["non-ASCII", "clé"],
     ["control character", "a\tb"],
+    ["two headers joined by a comma", "k1, k2"],
     ["a bare key over the limit", "k".repeat(256)],
     ["a quoted key over the limit", `"${"k".repeat(256)}"`],
   ])("rejects %s", (_name, value) => {

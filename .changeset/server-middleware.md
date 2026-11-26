@@ -2,7 +2,7 @@
 "effect-idempotency": patch
 ---
 
-Add the server middleware. `Idempotency.Service` declares an `HttpApiMiddleware` with the idempotency errors, and `Idempotency.layer` provides it with a scope, a retention and a lock expiry. A retry with the same key and the same request gets the first response with `Idempotent-Replayed: true`; a different request gets `422` and a retry during the first request gets `409`.
+Add the server middleware. `Idempotency.Service` declares an `HttpApiMiddleware` with the idempotency errors, and `Idempotency.layer` provides it with a scope, a retention and a lock expiry. A retry with the same key and the same request gets the first response, if its status was below 400, with `Idempotent-Replayed: true`; a different request gets `422` and a retry during the first request gets `409`.
 
 Add `IdempotencyStore`, the service a store implements, `IdempotencyStore.layerMemory`, and the `StoredResponse` and `Fingerprint` schemas a store handles.
 
