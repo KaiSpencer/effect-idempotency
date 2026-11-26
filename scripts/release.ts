@@ -4,7 +4,7 @@
  *
  * Nothing goes live from here. npm trusts this workflow for
  * `npm stage publish` only: the staged version waits until a maintainer
- * approves it with two-factor authentication (`npm stage approve`).
+ * approves it with two-factor authentication (`bun stage`).
  * Authentication is npm Trusted Publishing: the workflow's OIDC token, no
  * stored npm token.
  *
@@ -43,7 +43,7 @@ if (lookup.status !== 404) {
 const release = await $`gh release view ${tag}`.nothrow().quiet();
 if (release.exitCode === 0) {
   console.log(
-    `${pkg.name}@${pkg.version} is staged and waits for approval: npm stage list ${pkg.name}`,
+    `${pkg.name}@${pkg.version} is staged and waits for approval: bun stage`,
   );
   process.exit(0);
 }
@@ -51,6 +51,4 @@ if (release.exitCode === 0) {
 await $`bun run build`;
 await $`npm stage publish .`;
 await $`gh release create ${tag} --title ${tag} --generate-notes --target ${process.env.GITHUB_SHA ?? "main"}`;
-console.log(
-  `Staged ${pkg.name}@${pkg.version}. Approve it: npm stage list ${pkg.name}, then npm stage approve <stage-id>.`,
-);
+console.log(`Staged ${pkg.name}@${pkg.version}. Approve it: bun stage`);
