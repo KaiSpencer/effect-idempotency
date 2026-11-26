@@ -176,6 +176,40 @@ export const storeContract = (
         expect((yield* claim("k"))._tag).toBe("Claimed");
       }));
 
+    test("replaces the response when a claim completes again", () =>
+      Effect.gen(function* () {
+        const store = yield* IdempotencyStore.IdempotencyStore;
+        const first = yield* claimed("k");
+        yield* store.complete(first, response, retention);
+        const changed = { ...response, headers: { "x-changed": "yes" } };
+        yield* store.complete(first, changed, retention);
+
+        expect(yield* claim("k")).toMatchObject({
+          _tag: "Completed",
+          response: changed,
+        });
+      }));
+
+    test("does not let a completed claim replace the response of its successor", () =>
+      Effect.gen(function* () {
+        const store = yield* IdempotencyStore.IdempotencyStore;
+        const first = yield* claimed("k");
+        yield* store.complete(first, response, retention);
+        yield* TestClock.adjust(retention);
+        const second = yield* claimed("k");
+
+        yield* store.complete(first, response, retention);
+        expect((yield* claim("k"))._tag).toBe("InProgress");
+
+        const other = { ...response, status: 202 };
+        yield* store.complete(second, other, retention);
+        yield* store.complete(first, response, retention);
+        expect(yield* claim("k")).toMatchObject({
+          _tag: "Completed",
+          response: other,
+        });
+      }));
+
     test("does not release a completed key", () =>
       Effect.gen(function* () {
         const store = yield* IdempotencyStore.IdempotencyStore;

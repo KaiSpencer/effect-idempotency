@@ -307,10 +307,11 @@ export const idempotencyScenarios = (
         expect(yield* charges).toBe(1);
       }));
 
-    // Effect only applies such a change when it sends the response. A client
-    // that has already gone never gets that far, so the retry is replayed the
-    // response as the handler returned it. It is still not run a second time.
-    test("replays without that cookie when the first client left before the response", () =>
+    // Effect only applies such a change when it sends the response. Whether
+    // it gets that far here depends on whether the server has seen the client
+    // leave by the time the handler finishes, so the cookie may or may not be
+    // on the replay. What must hold is that the handler does not run again.
+    test("replays that request without running it again when the first client left", () =>
       Effect.gen(function* () {
         yield* hold;
         const first = yield* Effect.forkChild(checkout);
@@ -325,7 +326,6 @@ export const idempotencyScenarios = (
         }
         expect(retry.headers["idempotent-replayed"]).toBe("true");
         expect(yield* retry.json).toEqual({ id: "pay_1", amount: 1 });
-        expect(retry.headers["set-cookie"]).toBeUndefined();
         expect(yield* charges).toBe(1);
       }));
 

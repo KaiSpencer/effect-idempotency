@@ -189,7 +189,13 @@ const AuthenticationLive = Layer.succeed(Authentication, (httpEffect) =>
     const request = yield* HttpServerRequest.HttpServerRequest;
     const id = request.headers["x-user"];
     if (id === undefined) return yield* new Unauthenticated();
-    return yield* Effect.provideService(httpEffect, CurrentUser, { id });
+    // The rest of the request runs in a scope of its own, as it does under a
+    // middleware that opens a resource per request. That scope closes before
+    // the response is sent, and the idempotency middleware must not take its
+    // closing for the end of the request.
+    return yield* Effect.scoped(
+      Effect.provideService(httpEffect, CurrentUser, { id }),
+    );
   }),
 );
 

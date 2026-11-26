@@ -49,8 +49,8 @@ export const makeWithSize: Effect.Effect<{
   };
 
   /**
-   * The entry a claim still owns: nobody has claimed the key since. A claim
-   * past its lock expiry still owns its entry until then.
+   * The unfinished entry a claim still owns: nobody has claimed the key
+   * since. A claim past its lock expiry still owns its entry until then.
    */
   const owned = (claim: Claim): Entry | undefined => {
     const entry = entries.get(entryId(claim.scope, claim.key));
@@ -89,9 +89,10 @@ export const makeWithSize: Effect.Effect<{
         }),
       complete: (claim, response, retention) =>
         Effect.map(Clock.currentTimeMillis, (now) => {
-          const entry = owned(claim);
-          if (entry === undefined) return;
-          entries.set(entryId(claim.scope, claim.key), {
+          const id = entryId(claim.scope, claim.key);
+          const entry = entries.get(id);
+          if (entry === undefined || entry.token !== claim.token) return;
+          entries.set(id, {
             ...entry,
             expiresAt: now + Duration.toMillis(retention),
             response,

@@ -100,15 +100,20 @@ export class IdempotencyStore extends Context.Service<
     }) => Effect.Effect<ClaimResult, IdempotencyStoreError>;
     /**
      * Stores the response for a claim and keeps it for `retention`, counted
-     * from now, after which the key is free again. Does nothing if the claim
-     * is void.
+     * from now, after which the key is free again. A claim can complete more
+     * than once, and the last response replaces the one before: the
+     * middleware does so when the response changes before it is sent. Does
+     * nothing if the claim is void.
      */
     readonly complete: (
       claim: Claim,
       response: StoredResponse,
       retention: Duration.Duration,
     ) => Effect.Effect<void, IdempotencyStoreError>;
-    /** Frees the key of a claim. Does nothing if the claim is void. */
+    /**
+     * Frees the key of a claim that has not completed. Does nothing if the
+     * claim is void or has completed.
+     */
     readonly release: (
       claim: Claim,
     ) => Effect.Effect<void, IdempotencyStoreError>;
