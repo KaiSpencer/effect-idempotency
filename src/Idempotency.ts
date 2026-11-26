@@ -52,10 +52,9 @@ export const errors = [
 export type Errors = typeof errors;
 
 /**
- * Whether `response` is `returned` with its headers or cookies changed. The
- * pre-response handlers also run for another response, when a middleware
- * outside this one fails or the request is interrupted after the handler,
- * and that one must not be stored in its place.
+ * Whether `response` is `returned` with its headers or cookies changed, which
+ * is all a change registered for later is expected to do. Anything else is
+ * another response and must not be stored in its place.
  */
 const isChanged = (
   response: HttpServerResponse.HttpServerResponse,
@@ -133,9 +132,9 @@ export interface Options<Requires> {
  * interrupted, so a client that timed out and disconnected finds the response
  * stored when it retries. A handler that can hang needs its own timeout.
  *
- * The response is stored as it is sent, with any change the handler
- * registered for it, such as `HttpApiBuilder.securitySetCookie`. If the client
- * has gone by then, it is stored as the handler returned it.
+ * The response is stored with any change the handler registered for it, such
+ * as `HttpApiBuilder.securitySetCookie`, also when the client has gone before
+ * it is sent.
  *
  * A response whose body is not bytes in memory, such as a stream or a file,
  * is sent but not stored.
@@ -206,6 +205,32 @@ export const layer = <Id, Requires>(
                     cause,
                   ),
               );
+              // A handler can register a change to be made to its response
+              // just before it is sent, as `HttpApiBuilder.securitySetCookie`
+              // does, and a replay has to carry that change. Effect makes
+              // those changes in the order they were registered, so the two
+              // handlers registered here, one before the handler runs and one
+              // after, see the response before and after them.
+              const sent: {
+                /** The handler's response, once it is stored. */
+                stored?: HttpServerResponse.HttpServerResponse;
+                /** The error response the stored one stood in for. */
+                displaced?: HttpServerResponse.HttpServerResponse;
+              } = {};
+              // When the request fails after the handler succeeded, most
+              // often because the client has gone, Effect makes the changes
+              // to the error response it then sends. The handler meant them
+              // for the response that is stored, so that one takes its place
+              // until they are made.
+              yield* HttpEffect.appendPreResponseHandler((_request, response) =>
+                Effect.sync(() => {
+                  if (sent.stored === undefined || response.status < 400)
+                    return response;
+                  sent.displaced = response;
+                  return sent.stored;
+                }),
+              );
+
               const exit = yield* Effect.exit(httpEffect);
               if (Exit.isFailure(exit)) {
                 yield* release;
@@ -215,11 +240,11 @@ export const layer = <Id, Requires>(
               const complete = (
                 response: HttpServerResponse.HttpServerResponse,
               ) => {
-                const stored = StoredResponse.fromResponse(response);
-                return stored === undefined
+                const snapshot = StoredResponse.fromResponse(response);
+                return snapshot === undefined
                   ? Effect.void
                   : Effect.catchCause(
-                      store.complete(result.claim, stored, retention),
+                      store.complete(result.claim, snapshot, retention),
                       (cause) =>
                         Effect.logError(
                           "effect-idempotency: could not store the response",
@@ -241,20 +266,19 @@ export const layer = <Id, Requires>(
               // retry is answered with this response and the handler does not
               // run again.
               yield* complete(returned);
-              // A handler can register a change to be made to its response
-              // just before it is sent, as `HttpApiBuilder.securitySetCookie`
-              // does, and a replay should carry that change. This handler
-              // runs after those and stores the response again as it is sent.
-              // It never runs if the client has already gone, and then the
-              // response stays stored as the handler returned it.
+              sent.stored = returned;
+              // Stores the response again if the handler's changes were made
+              // to it, and sends on the response that was on its way.
               yield* HttpEffect.appendPreResponseHandler(
-                (_request, response) =>
-                  isChanged(response, returned)
+                (_request, response) => {
+                  const outgoing = sent.displaced ?? response;
+                  return isChanged(response, returned)
                     ? Effect.as(
                         Effect.uninterruptible(complete(response)),
-                        response,
+                        outgoing,
                       )
-                    : Effect.succeed(response),
+                    : Effect.succeed(outgoing);
+                },
               );
               return returned;
             }),

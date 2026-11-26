@@ -193,9 +193,14 @@ const AuthenticationLive = Layer.succeed(Authentication, (httpEffect) =>
     // middleware that opens a resource per request. That scope closes before
     // the response is sent, and the idempotency middleware must not take its
     // closing for the end of the request.
-    return yield* Effect.scoped(
+    const response = yield* Effect.scoped(
       Effect.provideService(httpEffect, CurrentUser, { id }),
     );
+    // Lets a test make the request fail after its handler has succeeded.
+    if (request.headers["x-fail-after-handler"] !== undefined) {
+      return yield* new Unauthenticated();
+    }
+    return response;
   }),
 );
 

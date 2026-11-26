@@ -55,6 +55,16 @@ const checkout = HttpClientRequest.post("/payments/checkout").pipe(
   HttpClient.execute,
 );
 
+/** A checkout that a middleware fails after its handler has succeeded. */
+const checkoutFailingAfter = HttpClientRequest.post("/payments/checkout").pipe(
+  HttpClientRequest.setHeaders({
+    "x-user": "alice",
+    "idempotency-key": "k1",
+    "x-fail-after-handler": "yes",
+  }),
+  HttpClient.execute,
+);
+
 const control = Effect.map(
   HttpApiClient.make(Payments.Api),
   (client) => client.control,
@@ -307,11 +317,9 @@ export const idempotencyScenarios = (
         expect(yield* charges).toBe(1);
       }));
 
-    // Effect only applies such a change when it sends the response. Whether
-    // it gets that far here depends on whether the server has seen the client
-    // leave by the time the handler finishes, so the cookie may or may not be
-    // on the replay. What must hold is that the handler does not run again.
-    test("replays that request without running it again when the first client left", () =>
+    // The cookie is on the replay whether or not the server had seen the
+    // client leave by the time the handler finished.
+    test("replays that cookie to a retry when the first client left before the response", () =>
       Effect.gen(function* () {
         yield* hold;
         const first = yield* Effect.forkChild(checkout);
@@ -325,7 +333,40 @@ export const idempotencyScenarios = (
           retry = yield* checkout;
         }
         expect(retry.headers["idempotent-replayed"]).toBe("true");
+        expect(retry.headers["set-cookie"]).toContain("last-payment=pay_1");
         expect(yield* retry.json).toEqual({ id: "pay_1", amount: 1 });
+        expect(yield* charges).toBe(1);
+      }));
+
+    // The same, with the server certain to have seen the client leave.
+    test("replays that cookie when the handler finished long after the client left", () =>
+      Effect.gen(function* () {
+        yield* hold;
+        const first = yield* Effect.forkChild(checkout);
+        yield* chargesReach(1);
+        yield* Fiber.interrupt(first);
+        yield* Effect.sleep("50 millis");
+        yield* resume;
+
+        let retry = yield* checkout;
+        while (retry.status === 409) {
+          yield* Effect.sleep("1 millis");
+          retry = yield* checkout;
+        }
+        expect(retry.headers["set-cookie"]).toContain("last-payment=pay_1");
+        expect(yield* charges).toBe(1);
+      }));
+
+    test("sends the error of a request that failed after its handler, and replays the handler's response", () =>
+      Effect.gen(function* () {
+        const failed = yield* checkoutFailingAfter;
+        expect(failed.status).toBe(401);
+        expect(failed.headers["set-cookie"]).toBeUndefined();
+
+        const retry = yield* checkout;
+        expect(retry.status).toBe(200);
+        expect(retry.headers["idempotent-replayed"]).toBe("true");
+        expect(retry.headers["set-cookie"]).toContain("last-payment=pay_1");
         expect(yield* charges).toBe(1);
       }));
 
