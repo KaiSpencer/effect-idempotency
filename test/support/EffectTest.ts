@@ -64,16 +64,19 @@ const run = async <A, E>(effect: Effect.Effect<A, E>): Promise<void> => {
 type Provide<R> = <A, E>(effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E>;
 
 const makeTester = <R>(provide: Provide<R>): Tester<R> => {
+  // `base` is looked up when a test is registered, not when the tester is
+  // built: with `CI` set, Bun throws on reading `test.only`, and building the
+  // tester must not fail a file that never uses it.
   const register =
     (
-      base: (
+      base: () => (
         name: string,
         fn: () => Promise<void>,
         timeout?: number,
       ) => unknown,
     ): EffectTest<R> =>
     (name, self, timeout) => {
-      base(name, () => run(provide(Effect.suspend(self))), timeout);
+      base()(name, () => run(provide(Effect.suspend(self))), timeout);
     };
 
   const each: Tester<R>["each"] = (cases) => (name, self, timeout) => {
@@ -88,13 +91,16 @@ const makeTester = <R>(provide: Provide<R>): Tester<R> => {
     );
   };
 
-  return Object.assign(register(test), {
-    skip: register(test.skip),
-    only: register(test.only),
-    todo: register(test.todo),
-    failing: register(test.failing),
-    each,
-  });
+  return Object.assign(
+    register(() => test),
+    {
+      skip: register(() => test.skip),
+      only: register(() => test.only),
+      todo: register(() => test.todo),
+      failing: register(() => test.failing),
+      each,
+    },
+  );
 };
 
 const withMethods = <Methods extends object>(
