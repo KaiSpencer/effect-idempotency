@@ -1,0 +1,28 @@
+{
+  "name": "effect-idempotency",
+  "version": "0.0.0",
+  "description": "Idempotency-Key handling for Effect's HttpApi. In development: this release only reserves the name.",
+  "license": "MIT",
+  "author": "KaiSpencer",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KaiSpencer/effect-idempotency.git"
+  },
+  "homepage": "https://github.com/KaiSpencer/effect-idempotency#readme",
+  "bugs": {
+    "url": "https://github.com/KaiSpencer/effect-idempotency/issues"
+  },
+  "keywords": [
+    "effect",
+    "effect-ts",
+    "idempotency",
+    "idempotency-key",
+    "httpapi",
+    "middleware"
+  ],
+  "files": [
+    "README.md",
+    "LICENSE"
+  ]
+}
