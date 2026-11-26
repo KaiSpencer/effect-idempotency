@@ -1,10 +1,12 @@
 {
   "name": "effect-idempotency",
   "version": "0.0.0",
-  "description": "Idempotency-Key handling for Effect's HttpApi. In development: this release only reserves the name.",
+  "description": "Idempotency-Key handling for Effect's HttpApi: server and client middleware. In development.",
   "license": "MIT",
   "author": "KaiSpencer",
   "type": "module",
+  "sideEffects": false,
+  "packageManager": "bun@1.4.5",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/KaiSpencer/effect-idempotency.git"
@@ -21,8 +23,38 @@
     "httpapi",
     "middleware"
   ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
   "files": [
+    "dist",
+    "src",
     "README.md",
     "LICENSE"
-  ]
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "verify": "bun fmt --check && bun lint && bun check && bun test",
+    "changeset": "changeset",
+    "version-packages": "changeset version",
+    "release": "bun scripts/release.ts",
+    "prepublishOnly": "bun run build"
+  },
+  "peerDependencies": {
+    "effect": "^4.1.0"
+  },
+  "devDependencies": {
+    "@changesets/changelog-github": "^1.0.1",
+    "@changesets/cli": "^3.0.3",
+    "@types/bun": "^1.4.5",
+    "effect": "^4.1.5",
+    "typescript": "^7.0.2"
+  }
 }

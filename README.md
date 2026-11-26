@@ -4,8 +4,8 @@
 server middleware that makes a retried request return the first response, and
 a client middleware that sends the same key on every retry.
 
-> **Status: in development.** Nothing is published yet beyond this README.
-> `0.0.0` on npm reserves the name. The API below is the plan, not a release.
+> **Status: in development.** Not on npm yet. The plan below is a plan, not a
+> release.
 
 ## Why
 
@@ -40,17 +40,21 @@ errors, layers, `SqlClient` transactions, or the generated `HttpApiClient`.
 The header and status codes follow the IETF draft
 [The Idempotency-Key HTTP Header Field](https://datatracker.ietf.org/doc/html/draft-ietf-httpapi-idempotency-key-header):
 
-| Case | Response |
-|---|---|
-| Key required and missing | `400` |
-| Key reused with a different request | `422` |
-| Retry while the first request is still running | `409` |
-| Retry after the first request finished | the stored response |
+| Case                                           | Response            |
+| ---------------------------------------------- | ------------------- |
+| Key required and missing                       | `400`               |
+| Key reused with a different request            | `422`               |
+| Retry while the first request is still running | `409`               |
+| Retry after the first request finished         | the stored response |
 
 Errors are `application/problem+json`. The draft leaves the hard parts open
 (crash recovery, key scoping, which responses are stored), so those follow
 Stripe's documented behavior. The key is accepted quoted, as the draft's
 structured-field syntax requires, and bare, as most clients send it.
+
+## Development
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ## License
 
