@@ -4,9 +4,11 @@ The repository runs on [Bun](https://bun.sh) alone: package manager, test
 runner, formatter, linter, typechecker, and bundler. There is no `typescript`
 dependency.
 
-It needs a canary build (`bun upgrade --canary`): `bun lint` and
-`bun build --dts` are not in a Bun release yet, so CI runs on canary too. Pin
-a version in both workflows once 1.4.6 is out.
+It needs a canary build: `bun lint` and `bun build --dts` are not in a Bun
+release yet. The exact build is pinned in `package.json` (`packageManager`),
+and CI installs that version from npm, where canary versions are immutable.
+Install the same one with `npm install --global bun@<that version>`. Move the
+pin to 1.4.6 once it is released.
 
 ```bash
 bun install
