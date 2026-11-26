@@ -1,0 +1,113 @@
+import { Clock, Duration, Effect } from "effect";
+import type {
+  Claim,
+  ClaimResult,
+  Fingerprint,
+  IdempotencyStore,
+  StoredResponse,
+} from "../IdempotencyStore.ts";
+
+interface Entry {
+  readonly fingerprint: Fingerprint;
+  readonly token: string;
+  /** Lock expiry while `response` is undefined, retention expiry after. */
+  readonly expiresAt: number;
+  readonly response: StoredResponse | undefined;
+}
+
+/** How often, in milliseconds, a claim also removes every expired entry. */
+export const sweepInterval = 60_000;
+
+// JSON keeps the pair unambiguous whatever characters the scope and key hold.
+const entryId = (scope: string, key: string): string =>
+  JSON.stringify([scope, key]);
+
+/**
+ * The store and the number of entries it holds, which only the tests read.
+ *
+ * Each operation reads the clock and then works on the map in one synchronous
+ * step, which is what makes a claim atomic.
+ */
+export const makeWithSize: Effect.Effect<{
+  readonly store: IdempotencyStore["Service"];
+  readonly size: Effect.Effect<number>;
+}> = Effect.sync(() => {
+  const entries = new Map<string, Entry>();
+  let tokens = 0;
+  let nextSweep = 0;
+
+  // An expired response is otherwise only removed when its key is claimed
+  // again, and most keys never are. An expired claim stays: its request is
+  // still running and may yet complete it.
+  const sweep = (now: number): void => {
+    if (now < nextSweep) return;
+    nextSweep = now + sweepInterval;
+    for (const [id, entry] of entries) {
+      if (entry.response !== undefined && entry.expiresAt <= now)
+        entries.delete(id);
+    }
+  };
+
+  /**
+   * The unfinished entry a claim still owns: nobody has claimed the key
+   * since. A claim past its lock expiry still owns its entry until then.
+   */
+  const owned = (claim: Claim): Entry | undefined => {
+    const entry = entries.get(entryId(claim.scope, claim.key));
+    return entry !== undefined &&
+      entry.token === claim.token &&
+      entry.response === undefined
+      ? entry
+      : undefined;
+  };
+
+  return {
+    size: Effect.sync(() => entries.size),
+    store: {
+      claim: ({ fingerprint, key, lockExpiry, scope }) =>
+        Effect.map(Clock.currentTimeMillis, (now): ClaimResult => {
+          sweep(now);
+          const id = entryId(scope, key);
+          const existing = entries.get(id);
+          if (existing !== undefined && existing.expiresAt > now) {
+            return existing.response === undefined
+              ? { _tag: "InProgress", fingerprint: existing.fingerprint }
+              : {
+                  _tag: "Completed",
+                  fingerprint: existing.fingerprint,
+                  response: existing.response,
+                };
+          }
+          const token = String(++tokens);
+          entries.set(id, {
+            fingerprint,
+            token,
+            expiresAt: now + Duration.toMillis(lockExpiry),
+            response: undefined,
+          });
+          return { _tag: "Claimed", claim: { scope, key, token } };
+        }),
+      complete: (claim, response, retention) =>
+        Effect.map(Clock.currentTimeMillis, (now) => {
+          const id = entryId(claim.scope, claim.key);
+          const entry = entries.get(id);
+          if (entry === undefined || entry.token !== claim.token) return;
+          entries.set(id, {
+            ...entry,
+            expiresAt: now + Duration.toMillis(retention),
+            response,
+          });
+        }),
+      release: (claim) =>
+        Effect.sync(() => {
+          if (owned(claim) !== undefined)
+            entries.delete(entryId(claim.scope, claim.key));
+        }),
+    },
+  };
+});
+
+export const make: Effect.Effect<IdempotencyStore["Service"]> = Effect.map(
+  makeWithSize,
+  ({ store }) => store,
+);

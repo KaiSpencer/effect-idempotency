@@ -30,6 +30,32 @@ version.
 Relative imports carry the `.ts` extension. `tsconfig.src.json` typechecks
 `src/` without Bun's types, so the library cannot lean on a Bun global.
 
+## Tests
+
+`bun test` runs everything. The tests come in four kinds:
+
+- **Unit** (`test/*.test.ts`, `test/internal`): the pure parts, one module
+  per file.
+- **Store contract** (`test/support/storeContract.ts`): what every
+  `IdempotencyStore` must do. A new store's test file calls `storeContract`
+  with its layer.
+- **Pipeline** (`test/Idempotency.test.ts`): the middleware through the whole
+  `HttpApi` pipeline with a typed client and no socket, under the test clock.
+- **End to end** (`test/e2e`): what a client sees over a real connection.
+  `scenarios.ts` only speaks HTTP, through Effect's `HttpClient`. Each way of
+  serving the fixture API has a test file that passes it a layer, which starts
+  a server and provides a client pointed at it, so a new setup is one small
+  file.
+
+Effect tests use `test/support/EffectTest.ts`, a port of `@effect/vitest` to
+`bun test`: `it.effect` runs an Effect with a scope and a `TestClock`,
+`it.live` with the real clock, and `layer` shares one layer between the tests
+of a block.
+
+`test/fixtures/Payments.ts` is the API the pipeline and end-to-end tests run
+against. Its control endpoints hold a charge open and count the charges, so a
+test can ask "did the handler run twice?" over HTTP.
+
 ## Changes
 
 `main` is protected: every change arrives through a pull request, and the
