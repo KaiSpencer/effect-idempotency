@@ -2,41 +2,24 @@
  * `npm stage`, as a service: the staged versions of a package, and the
  * command that approves one.
  */
-import { Context, Effect, Layer, Option, Schema, Stream } from "effect";
+import {
+  Array as Arr,
+  Context,
+  Effect,
+  Layer,
+  Option,
+  Schema,
+  Stream,
+} from "effect";
 import { CliError } from "effect/cli";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { runAttached } from "./runAttached.ts";
-
-/** A version waiting on npm for a maintainer's approval. */
-export class StagedVersion extends Schema.Class<StagedVersion>("StagedVersion")(
-  {
-    id: Schema.String,
-    packageName: Schema.String,
-    version: Schema.String,
-    tag: Schema.String,
-    status: Schema.String,
-    createdAt: Schema.String,
-    actor: Schema.optionalKey(Schema.String),
-    shasum: Schema.optionalKey(Schema.String),
-  },
-) {
-  get spec(): string {
-    return `${this.packageName}@${this.version}`;
-  }
-
-  /** Where the version lives on npmjs.com once published. */
-  get url(): string {
-    return `https://www.npmjs.com/package/${this.packageName}/v/${this.version}`;
-  }
-
-  /**
-   * npm reviews every staged version automatically, and refuses to approve
-   * one until that review ends.
-   */
-  get inReview(): boolean {
-    return this.status === "validating";
-  }
-}
+import {
+  newestFirst,
+  type PackageName,
+  type StageId,
+  StagedVersion,
+} from "./StagedVersion.ts";
 
 export class NpmError extends Schema.TaggedError<NpmError>()("NpmError", {
   args: Schema.Array(Schema.String),
@@ -47,6 +30,9 @@ export class NpmError extends Schema.TaggedError<NpmError>()("NpmError", {
   }
 }
 
+/** What `npm stage list --json` prints. */
+const StageList = Schema.fromJsonString(Schema.Array(StagedVersion));
+
 /** What `npm --json` prints to stdout when a command fails. */
 const NpmJsonFailure = Schema.fromJsonString(
   Schema.Struct({ error: Schema.Struct({ summary: Schema.String }) }),
@@ -55,12 +41,12 @@ const NpmJsonFailure = Schema.fromJsonString(
 export class NpmStage extends Context.Service<
   NpmStage,
   {
-    /** Every staged version of `packageName`, oldest first. */
+    /** Every staged version of `packageName`, newest first. */
     list(
-      packageName: string,
+      packageName: PackageName,
     ): Effect.Effect<ReadonlyArray<StagedVersion>, NpmError>;
     /** Publishes a staged version. npm asks for two-factor authentication. */
-    approve(id: string): Effect.Effect<void, NpmError>;
+    approve(id: StageId): Effect.Effect<void, NpmError>;
   }
 >()("effect-idempotency/scripts/stage/NpmStage") {
   static readonly layer = Layer.effect(
@@ -68,18 +54,11 @@ export class NpmStage extends Context.Service<
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
 
-      /** Runs `npm <args> --json` and decodes what it prints. */
-      const json = <A>(
-        schema: Schema.Codec<A, unknown>,
-        args: ReadonlyArray<string>,
-      ): Effect.Effect<A, NpmError> => {
-        const fullArgs = [...args, "--json"];
-        const fail = (reason: string) =>
-          new NpmError({ args: fullArgs, reason });
+      /** Runs `npm <args>` and returns what it prints to stdout. */
+      const capture = (args: ReadonlyArray<string>) => {
+        const fail = (reason: string) => new NpmError({ args, reason });
         return Effect.gen(function* () {
-          const handle = yield* spawner.spawn(
-            ChildProcess.make("npm", fullArgs),
-          );
+          const handle = yield* spawner.spawn(ChildProcess.make("npm", args));
           const [stdout, stderr, exitCode] = yield* Effect.all(
             [
               Stream.mkString(Stream.decodeText(handle.stdout)),
@@ -96,36 +75,43 @@ export class NpmStage extends Context.Service<
               }),
             );
           }
-          return yield* Schema.decodeUnknownEffect(
-            Schema.fromJsonString(schema),
-          )(stdout).pipe(
-            Effect.mapError((issue) =>
-              fail(`unexpected output: ${issue.message}`),
-            ),
-          );
+          return stdout;
         }).pipe(
           Effect.scoped,
           Effect.catchTag("PlatformError", (error) => fail(error.message)),
         );
       };
 
-      return NpmStage.of({
-        list: (packageName) =>
-          json(Schema.Array(StagedVersion), [
-            "stage",
-            "list",
-            packageName,
-          ]).pipe(Effect.withSpan("NpmStage.list")),
-        // Approving stops for two-factor authentication in the browser, so
-        // npm runs on this terminal.
-        approve: (id) => {
-          const args = ["stage", "approve", id];
-          return runAttached(spawner, "npm", args).pipe(
-            Effect.mapError(({ reason }) => new NpmError({ args, reason })),
-            Effect.withSpan("NpmStage.approve"),
-          );
-        },
+      const list = Effect.fn("NpmStage.list")(function* (
+        packageName: PackageName,
+      ) {
+        const args = ["stage", "list", packageName, "--json"];
+        const staged = yield* capture(args).pipe(
+          Effect.flatMap((stdout) =>
+            Schema.decodeUnknownEffect(StageList)(stdout).pipe(
+              Effect.mapError(
+                (issue) =>
+                  new NpmError({
+                    args,
+                    reason: `unexpected output: ${issue.message}`,
+                  }),
+              ),
+            ),
+          ),
+        );
+        return Arr.sort(staged, newestFirst);
       });
+
+      // Approving stops for two-factor authentication in the browser, so npm
+      // runs on this terminal.
+      const approve = Effect.fn("NpmStage.approve")(function* (id: StageId) {
+        const args = ["stage", "approve", id];
+        yield* runAttached(spawner, "npm", args).pipe(
+          Effect.mapError(({ reason }) => new NpmError({ args, reason })),
+        );
+      });
+
+      return NpmStage.of({ list, approve });
     }),
   );
 }

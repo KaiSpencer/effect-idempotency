@@ -48,7 +48,7 @@ const runStage = (
 const lastFrame = (frames: ReadonlyArray<string>) => frames.at(-1) ?? "";
 
 describe("bun stage", () => {
-  test("lists the staged versions", async () => {
+  test("lists the staged versions, newest first", async () => {
     const run = await runStage(
       {
         staged: [stagedVersion("0.1.0"), stagedVersion("0.2.0", "validating")],
@@ -58,8 +58,9 @@ describe("bun stage", () => {
     );
 
     expect(Result.isSuccess(run.result)).toBe(true);
-    expect(lastFrame(run.frames)).toContain("› 0.1.0  ● ready to publish");
-    expect(lastFrame(run.frames)).toContain("  0.2.0  ◌ npm is reviewing");
+    expect(lastFrame(run.frames)).toContain(
+      "› 0.2.0  ◌ npm is reviewing    latest · staged 2026-11-26 14:41 UTC by GitHub Actions\n  0.1.0  ● ready to publish",
+    );
   });
 
   test("publishes after enter, then enter again on the confirmation", async () => {
@@ -93,8 +94,8 @@ describe("bun stage", () => {
       ["down", "return", "return", "q"],
     );
 
-    expect(run.calls).toContain("npm stage approve id-0.2.0");
-    expect(run.calls).not.toContain("npm stage approve id-0.1.0");
+    expect(run.calls).toContain("npm stage approve id-0.1.0");
+    expect(run.calls).not.toContain("npm stage approve id-0.2.0");
   });
 
   test("escape on the confirmation goes back without publishing", async () => {
@@ -130,6 +131,68 @@ describe("bun stage", () => {
       "npm stage list effect-idempotency",
       "npm stage list effect-idempotency",
     ]);
+  });
+
+  test("shows a version as publishing until npm has published it", async () => {
+    const run = await runStage(
+      { staged: [stagedVersion("0.1.0")], publishLists: 2 },
+      ["return", "return", Duration.minutes(1), "q"],
+    );
+
+    expect(run.calls).toEqual([
+      "npm stage list effect-idempotency",
+      "npm stage approve id-0.1.0",
+      "npm stage list effect-idempotency",
+      "npm stage list effect-idempotency",
+      "npm stage list effect-idempotency",
+    ]);
+    const frames = run.frames.join("\n");
+    expect(frames).toContain("npm is publishing effect-idempotency@0.1.0...");
+    expect(frames).toContain("› 0.1.0  ◌ publishing");
+    expect(lastFrame(run.frames)).toContain(
+      "Published effect-idempotency@0.1.0.",
+    );
+    expect(run.output).toContain(
+      "Published effect-idempotency@0.1.0: https://www.npmjs.com/package/effect-idempotency/v/0.1.0",
+    );
+  });
+
+  test("a version npm is publishing cannot be approved again", async () => {
+    const run = await runStage(
+      { staged: [stagedVersion("0.1.0")], publishLists: 100 },
+      ["return", "return", "return", "return", "q"],
+    );
+
+    expect(
+      run.calls.filter((call) => call.startsWith("npm stage approve")),
+    ).toEqual(["npm stage approve id-0.1.0"]);
+    expect(run.frames.join("\n")).toContain(
+      "npm is publishing effect-idempotency@0.1.0.",
+    );
+  });
+
+  test("quitting before npm has published says so", async () => {
+    const run = await runStage(
+      { staged: [stagedVersion("0.1.0")], publishLists: 100 },
+      ["return", "return", "q"],
+    );
+
+    expect(run.output).toContain(
+      "npm is still publishing effect-idempotency@0.1.0.",
+    );
+    expect(run.output).not.toContain("Published");
+  });
+
+  test("a version in another state on npm cannot be published", async () => {
+    const run = await runStage(
+      { staged: [stagedVersion("0.1.0", "rejected")] },
+      ["return", "q"],
+    );
+
+    expect(run.calls).not.toContain("npm stage approve id-0.1.0");
+    expect(run.frames.join("\n")).toContain(
+      "effect-idempotency@0.1.0 is rejected on npm",
+    );
   });
 
   test("checks on a review by itself until the version is ready", async () => {

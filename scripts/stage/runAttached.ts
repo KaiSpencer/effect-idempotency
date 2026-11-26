@@ -1,9 +1,10 @@
-import { Data, Effect } from "effect";
+import { Effect, Schema } from "effect";
 import { ChildProcess, type ChildProcessSpawner } from "effect/process";
 
-export class CommandFailed extends Data.TaggedError("CommandFailed")<{
-  readonly reason: string;
-}> {}
+export class CommandFailed extends Schema.TaggedError<CommandFailed>()(
+  "CommandFailed",
+  { reason: Schema.String },
+) {}
 
 /**
  * Runs a command on this terminal, so it shows its own output and can ask

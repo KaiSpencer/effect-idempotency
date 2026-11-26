@@ -3,6 +3,11 @@ import { Effect, Layer, Redacted, Result, Sink, Stream } from "effect";
 import type { ChildProcess } from "effect/process";
 import { ChildProcessSpawner } from "effect/process";
 import { NpmStage } from "../NpmStage.ts";
+import { PackageName, StageId } from "../StagedVersion.ts";
+import { npmJson } from "./TestEnvironment.ts";
+
+const packageName = PackageName.make("effect-idempotency");
+const stageId = StageId.make("0b1537e6-a624-40d9-85f5-bbfa4771cdf5");
 
 interface Reply {
   readonly stdout?: string;
@@ -68,24 +73,11 @@ const withNpm = <A, E>(
   );
 };
 
-const staged = {
-  id: "0b1537e6-a624-40d9-85f5-bbfa4771cdf5",
-  packageName: "effect-idempotency",
-  version: "0.0.1",
-  tag: "latest",
-  createdAt: "2026-11-26T14:41:51.008Z",
-  actor: "GitHub Actions",
-  actorType: "trusted automation",
-  access: "public",
-  shasum: "e406607c8ac3c7e5f5bdcfc7daf9512d7003d977",
-  status: "validating",
-};
-
 describe("NpmStage", () => {
   test("list decodes what npm stage list --json prints", async () => {
     const { result, spawned } = await withNpm(
-      { stdout: JSON.stringify([staged]) },
-      (npm) => npm.list("effect-idempotency"),
+      { stdout: JSON.stringify([npmJson("0.0.1", "validating")]) },
+      (npm) => npm.list(packageName),
     );
 
     expect(spawned.map((s) => s.command)).toEqual([
@@ -94,6 +86,25 @@ describe("NpmStage", () => {
     const [version] = Result.getOrThrow(result);
     expect(version?.spec).toBe("effect-idempotency@0.0.1");
     expect(version?.inReview).toBe(true);
+  });
+
+  test("list puts the newest version first", async () => {
+    const { result } = await withNpm(
+      {
+        stdout: JSON.stringify([
+          npmJson("0.2.0"),
+          npmJson("0.10.0"),
+          npmJson("0.9.1"),
+        ]),
+      },
+      (npm) => npm.list(packageName),
+    );
+
+    expect(Result.getOrThrow(result).map((s) => s.spec)).toEqual([
+      "effect-idempotency@0.10.0",
+      "effect-idempotency@0.9.1",
+      "effect-idempotency@0.2.0",
+    ]);
   });
 
   test("a failure carries the summary npm prints as JSON", async () => {
@@ -108,7 +119,7 @@ describe("NpmStage", () => {
           },
         }),
       },
-      (npm) => npm.list("x"),
+      (npm) => npm.list(packageName),
     );
 
     expect(Result.isFailure(result)).toBe(true);
@@ -120,7 +131,7 @@ describe("NpmStage", () => {
   test("a failure without JSON falls back to stderr", async () => {
     const { result } = await withNpm(
       { exitCode: 1, stderr: "npm error code E401\n" },
-      (npm) => npm.list("effect-idempotency"),
+      (npm) => npm.list(packageName),
     );
 
     expect(Result.isFailure(result)).toBe(true);
@@ -131,7 +142,7 @@ describe("NpmStage", () => {
 
   test("output that is not a list of staged versions fails", async () => {
     const { result } = await withNpm({ stdout: "[{}]" }, (npm) =>
-      npm.list("effect-idempotency"),
+      npm.list(packageName),
     );
 
     expect(Result.isFailure(result)).toBe(true);
@@ -142,13 +153,13 @@ describe("NpmStage", () => {
 
   test("approve runs on the terminal, for two-factor authentication", async () => {
     const { result, spawned } = await withNpm({}, (npm) =>
-      npm.approve(staged.id),
+      npm.approve(stageId),
     );
 
     expect(Result.isSuccess(result)).toBe(true);
     expect(spawned).toEqual([
       {
-        command: `npm stage approve ${staged.id}`,
+        command: `npm stage approve ${stageId}`,
         options: { stdin: "inherit", stdout: "inherit", stderr: "inherit" },
       },
     ]);
@@ -156,7 +167,7 @@ describe("NpmStage", () => {
 
   test("approve fails when npm does", async () => {
     const { result } = await withNpm({ exitCode: 1 }, (npm) =>
-      npm.approve(staged.id),
+      npm.approve(stageId),
     );
 
     expect(Result.isFailure(result)).toBe(true);

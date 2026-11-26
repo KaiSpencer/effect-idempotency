@@ -7,17 +7,19 @@ import {
   Duration,
   Effect,
   FileSystem,
+  Option,
   Queue,
   Schema,
   Terminal,
 } from "effect";
 import { CliError, Command } from "effect/cli";
 import * as Dashboard from "./Dashboard.ts";
-import { NpmStage, type StagedVersion } from "./NpmStage.ts";
+import { NpmStage } from "./NpmStage.ts";
+import { PackageName } from "./StagedVersion.ts";
 
-const PackageJson = Schema.fromJsonString(
-  Schema.Struct({ name: Schema.String }),
-);
+const PackageJson = Schema.fromJsonString(Schema.Struct({ name: PackageName }));
+
+const decodeKey = Schema.decodeUnknownOption(Dashboard.Key);
 
 /** The name of the package in the current directory. */
 const readPackageName = Effect.gen(function* () {
@@ -49,17 +51,18 @@ const screen = {
  */
 const terminalHandOff = Duration.millis(50);
 
-type Outcome =
-  | { readonly _tag: "Quit" }
-  | { readonly _tag: "Approve"; readonly staged: StagedVersion };
+/** Where the dashboard hands control back: to quit, or to approve. */
+type Exit = readonly [
+  Dashboard.Model,
+  Extract<Dashboard.Command, { readonly _tag: "Quit" | "Approve" }>,
+];
 
 /**
  * Runs the dashboard until the user quits or confirms a version to publish.
  * It holds the terminal until then, so npm can have it afterwards.
  */
 const runDashboard = Effect.fn("runDashboard")(function* (
-  packageName: string,
-  notice: Dashboard.Notice | undefined,
+  step: Dashboard.Step,
 ) {
   const terminal = yield* Terminal.Terminal;
   const npm = yield* NpmStage;
@@ -71,72 +74,84 @@ const runDashboard = Effect.fn("runDashboard")(function* (
     display(screen.leave),
   );
 
-  const load = npm.list(packageName).pipe(
-    Effect.match({
-      onSuccess: (staged) => Dashboard.Msg.Loaded({ staged }),
-      onFailure: (error) =>
-        Dashboard.Msg.LoadFailed({ reason: error[CliError.userMessage] }),
-    }),
-  );
-  // While npm reviews a version, check on it again after a quiet spell.
-  const nextKey = (model: Dashboard.Model) => {
-    const key = Queue.take(keys).pipe(
-      Effect.map(({ key }) => Dashboard.Msg.KeyPressed({ key: key.name })),
-      Effect.catch(() => Effect.succeed(Dashboard.Msg.Closed())),
+  const load = (model: Dashboard.Model) =>
+    npm.list(model.packageName).pipe(
+      Effect.match({
+        onSuccess: (staged) => Dashboard.Msg.Loaded({ staged }),
+        onFailure: (error) =>
+          Dashboard.Msg.LoadFailed({ reason: error[CliError.userMessage] }),
+      }),
     );
-    return Dashboard.awaitsReview(model)
+  // While npm works on a version, check on it again after a quiet spell.
+  const nextKey = (model: Dashboard.Model) => {
+    // Keys the dashboard does not answer are skipped here.
+    const key = Effect.gen(function* () {
+      while (true) {
+        const input = yield* Queue.take(keys);
+        const key = decodeKey(input.key.name);
+        if (Option.isSome(key)) {
+          return Dashboard.Msg.KeyPressed({ key: key.value });
+        }
+      }
+    }).pipe(Effect.catch(() => Effect.succeed(Dashboard.Msg.Closed())));
+    return Dashboard.awaitsNpm(model)
       ? key.pipe(
           Effect.timeoutOrElse({
-            duration: Dashboard.reviewPollInterval,
+            duration: Dashboard.pollInterval,
             orElse: () => Effect.succeed(Dashboard.Msg.Tick()),
           }),
         )
       : key;
   };
 
-  let [model, command] = Dashboard.init(packageName, notice);
+  let [model, command] = step;
   while (true) {
     switch (command._tag) {
       case "Quit":
-        return { _tag: "Quit" } satisfies Outcome;
-      case "Approve":
-        return { _tag: "Approve", staged: command.staged } satisfies Outcome;
+      case "Approve": {
+        const exit: Exit = [model, command];
+        return exit;
+      }
     }
     yield* display(screen.clear + Dashboard.view(model));
     const msg =
-      command._tag === "Refresh" ? yield* load : yield* nextKey(model);
+      command._tag === "Refresh" ? yield* load(model) : yield* nextKey(model);
     [model, command] = Dashboard.update(model, msg);
   }
 }, Effect.scoped);
 
 const session = Effect.fn("session")(function* () {
   const npm = yield* NpmStage;
-  const packageName = yield* readPackageName;
-  const published: Array<StagedVersion> = [];
-  let notice: Dashboard.Notice | undefined;
+  let step = Dashboard.init(yield* readPackageName);
   while (true) {
-    const outcome = yield* runDashboard(packageName, notice);
-    if (outcome._tag === "Quit") break;
-    const { staged } = outcome;
+    const [model, command] = yield* runDashboard(step);
+    if (command._tag === "Quit") {
+      for (const staged of model.published) {
+        yield* Console.log(`Published ${staged.spec}: ${staged.url}`);
+      }
+      for (const staged of model.publishing) {
+        yield* Console.log(
+          `npm is still publishing ${staged.spec}. It appears at ${staged.url} once done.`,
+        );
+      }
+      return;
+    }
+    const { staged } = command;
     yield* Effect.sleep(terminalHandOff);
     yield* Console.log(
       `Publishing ${staged.spec}. npm asks for two-factor authentication.`,
     );
-    notice = yield* npm.approve(staged.id).pipe(
+    // Back on the dashboard, the list refreshes until npm has published it.
+    const result = yield* npm.approve(staged.id).pipe(
       Effect.match({
-        onSuccess: (): Dashboard.Notice => {
-          published.push(staged);
-          return { tone: "success", text: `Published ${staged.spec}.` };
-        },
-        onFailure: (error): Dashboard.Notice => ({
-          tone: "error",
-          text: error[CliError.userMessage],
-        }),
+        onSuccess: () => Dashboard.Msg.Approved({ staged }),
+        onFailure: (error) =>
+          Dashboard.Msg.ApproveFailed({
+            reason: error[CliError.userMessage],
+          }),
       }),
     );
-  }
-  for (const staged of published) {
-    yield* Console.log(`Published ${staged.spec}: ${staged.url}`);
+    step = Dashboard.update(model, result);
   }
 });
 

@@ -2,6 +2,7 @@
  * In-memory stand-ins for what `bun stage` talks to: npm, the file system,
  * and a terminal that types a script of keys and records every frame.
  */
+import { stripVTControlCharacters } from "node:util";
 import {
   type Cause,
   Duration,
@@ -11,29 +12,44 @@ import {
   Option,
   Path,
   Queue,
+  Array as Arr,
+  Schema,
   Stdio,
   Terminal,
 } from "effect";
 import { ChildProcessSpawner } from "effect/process";
 import { TestConsole } from "effect/testing";
-import { NpmError, NpmStage, StagedVersion } from "../NpmStage.ts";
+import { NpmError, NpmStage } from "../NpmStage.ts";
+import {
+  newestFirst,
+  PackageName,
+  StagedVersion,
+  StageStatus,
+  type StageId,
+} from "../StagedVersion.ts";
 
-export const packageName = "effect-idempotency";
+export const packageName = PackageName.make("effect-idempotency");
 
+/** A staged version as `npm stage list --json` prints it. */
+export const npmJson = (version: string, status = "staged") => ({
+  id: `id-${version}`,
+  packageName,
+  version,
+  tag: "latest",
+  createdAt: "2026-11-26T14:41:51.008Z",
+  actor: "GitHub Actions",
+  actorType: "trusted automation",
+  access: "public",
+  shasum: "e406607c8ac3c7e5f5bdcfc7daf9512d7003d977",
+  status,
+});
+
+/** A staged version, decoded from what npm prints, as the service does. */
 export const stagedVersion = (
   version: string,
   status = "staged",
 ): StagedVersion =>
-  new StagedVersion({
-    id: `id-${version}`,
-    packageName,
-    version,
-    tag: "latest",
-    status,
-    createdAt: "2026-11-26T14:41:51.008Z",
-    actor: "GitHub Actions",
-    shasum: "e406607c8ac3c7e5f5bdcfc7daf9512d7003d977",
-  });
+  Schema.decodeUnknownSync(StagedVersion)(npmJson(version, status));
 
 export interface FakeNpmOptions {
   readonly staged: ReadonlyArray<StagedVersion>;
@@ -43,17 +59,24 @@ export interface FakeNpmOptions {
   readonly listFails?: string;
   /** Makes `npm stage approve` fail with this reason. */
   readonly approveFails?: string;
+  /**
+   * How many `npm stage list` calls still list a version after approving it,
+   * as when npm takes a while to publish.
+   */
+  readonly publishLists?: number;
 }
 
 /**
  * A fake `npm stage` over a list of staged versions: approving one publishes
- * it, so it leaves the list. Each call lands in `calls`, as the npm command
- * it stands for.
+ * it, so it leaves the list, after `publishLists` more lists. Each call lands
+ * in `calls`, as the npm command it stands for.
  */
 export const fakeNpm = (options: FakeNpmOptions) => {
   const calls: Array<string> = [];
   let staged = options.staged;
   let reviewLists = options.reviewLists ?? 0;
+  /** Approved versions, by id, and how many more lists still show them. */
+  const publishing = new Map<StageId, number>();
 
   const layer = Layer.succeed(
     NpmStage,
@@ -69,13 +92,27 @@ export const fakeNpm = (options: FakeNpmOptions) => {
               }),
             );
           }
+          for (const [id, lists] of publishing) {
+            if (lists > 0) {
+              publishing.set(id, lists - 1);
+            } else {
+              publishing.delete(id);
+              staged = staged.filter((s) => s.id !== id);
+            }
+          }
           const reviewing = reviewLists > 0;
           reviewLists -= 1;
           return Effect.succeed(
-            staged.map((s) =>
-              reviewing || !s.inReview
-                ? s
-                : new StagedVersion({ ...s, status: "staged" }),
+            Arr.sort(
+              staged.map((s) =>
+                reviewing || !s.inReview
+                  ? s
+                  : new StagedVersion({
+                      ...s,
+                      status: StageStatus.make("staged"),
+                    }),
+              ),
+              newestFirst,
             ),
           );
         }),
@@ -90,7 +127,7 @@ export const fakeNpm = (options: FakeNpmOptions) => {
               }),
             );
           }
-          staged = staged.filter((s) => s.id !== id);
+          publishing.set(id, options.publishLists ?? 0);
           return Effect.void;
         }),
     }),
@@ -138,7 +175,10 @@ export const fakeTerminal = (keystrokes: ReadonlyArray<Keystroke>) => {
         readLine: Effect.die("readLine is not used"),
         display: (text) =>
           Effect.sync(() => {
-            const plain = text.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, "");
+            const plain = stripVTControlCharacters(text).replaceAll(
+              "\r\n",
+              "\n",
+            );
             if (plain !== "") frames.push(plain);
           }),
       });
