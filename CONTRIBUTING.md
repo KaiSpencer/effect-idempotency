@@ -32,20 +32,51 @@ Relative imports carry the `.ts` extension. `tsconfig.src.json` typechecks
 
 ## Tests
 
-`bun test` runs everything. The tests come in four kinds:
+`bun test` runs everything. The tests come in five kinds:
 
 - **Unit** (`test/*.test.ts`, `test/internal`): the pure parts, one module
   per file.
 - **Store contract** (`test/support/storeContract.ts`): what every
   `IdempotencyStore` must do. A new store's test file calls `storeContract`
-  with its layer.
+  with its layer. Its last test is a **model check**
+  (`test/support/storeModel.ts`): random sequences of claims, completions,
+  releases and passing time must get the same answers from the store as from
+  the memory store, and a sequence that does not is shrunk to a short one.
+- **SQL store** (`test/IdempotencyStoreSql.test.ts`): the contract, and then
+  what only a store in a database can get wrong, each on every database of
+  `test/support/sqlBackends.ts`.
 - **Pipeline** (`test/Idempotency.test.ts`): the middleware through the whole
   `HttpApi` pipeline with a typed client and no socket, under the test clock.
 - **End to end** (`test/e2e`): what a client sees over a real connection.
   `scenarios.ts` only speaks HTTP, through Effect's `HttpClient`. Each way of
   serving the fixture API has a test file that passes it a layer, which starts
   a server and provides a client pointed at it, so a new setup is one small
-  file.
+  file. `bunServeSql.test.ts` also runs two servers on one database.
+
+### Databases
+
+The SQL store is tested on three databases. Two run inside `bun test` and
+need nothing: SQLite, and PGlite, which is PostgreSQL compiled to WebAssembly.
+The third is a PostgreSQL server, the only one of the three with more than one
+connection, so the only one where two statements run at the same time. Its
+tests run when `TEST_POSTGRES_URL` names a server, and are reported as skipped
+otherwise:
+
+```bash
+docker run --rm -d --name effect-idempotency-postgres \
+  -e POSTGRES_PASSWORD=postgres -p 127.0.0.1:54329:5432 postgres:17-alpine
+TEST_POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:54329/postgres bun test
+docker stop effect-idempotency-postgres
+```
+
+Each test works in a schema of its own, which it drops, so the database can
+be any one you do not mind schemas named `test_...` appearing in. CI runs a
+server for the `check` job, and there a missing `TEST_POSTGRES_URL` fails the
+run.
+
+A test under the test clock should not move it by more than a few weeks at
+once: a database client has timers of its own, and the test clock runs every
+one of them for each interval it skips.
 
 Effect tests use `test/support/EffectTest.ts`, a port of `@effect/vitest` to
 `bun test`: `it.effect` runs an Effect with a scope and a `TestClock`,

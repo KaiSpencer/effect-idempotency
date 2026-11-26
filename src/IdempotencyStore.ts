@@ -9,8 +9,11 @@
  * @module
  */
 import { Context, type Duration, type Effect, Layer, Schema } from "effect";
+import { SecureRandom } from "effect/crypto";
+import type { SqlClient } from "effect/sql";
 import type { IdempotencyKey } from "./IdempotencyKey.ts";
 import * as memoryStore from "./internal/memoryStore.ts";
+import * as sqlStore from "./internal/sqlStore.ts";
 
 /**
  * What makes two requests the same request. The middleware computes it and a
@@ -130,3 +133,33 @@ export const layerMemory: Layer.Layer<IdempotencyStore> = Layer.effect(
   IdempotencyStore,
   memoryStore.make,
 );
+
+/** The options of {@link layerSql}. */
+export type SqlOptions = sqlStore.Options;
+
+/**
+ * A store in a SQL database, through the `SqlClient` the application already
+ * provides. It supports PostgreSQL and SQLite, and the layer fails to build
+ * on another database.
+ *
+ * Every server that shares the database shares the keys, and they survive a
+ * restart. The layer creates its table and an index if they do not exist, so
+ * the database user needs the right to. For as long as the layer is built it
+ * also deletes, every few minutes, the responses past their retention and the
+ * claims a dead process left behind.
+ *
+ * A key expires by the `Clock` of the server that wrote it, so keep the
+ * servers' clocks within a small part of the lock expiry of each other.
+ *
+ * ```ts
+ * const StoreLive = IdempotencyStore.layerSql().pipe(
+ *   Layer.provide(PgClient.layer({ url })),
+ * )
+ * ```
+ */
+export const layerSql = (
+  options?: SqlOptions,
+): Layer.Layer<IdempotencyStore, never, SqlClient.SqlClient> =>
+  Layer.effect(IdempotencyStore, sqlStore.make(options)).pipe(
+    Layer.provide(SecureRandom.layerWebCrypto),
+  );

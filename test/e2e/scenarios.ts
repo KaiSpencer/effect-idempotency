@@ -20,7 +20,7 @@ const problemType = (name: string) =>
   `https://github.com/KaiSpencer/effect-idempotency#${name}`;
 
 /** Creates a payment as `alice` with the key `k1` unless told otherwise. */
-const create = (
+export const create = (
   amount: number,
   options?: {
     key?: string | undefined;
@@ -55,6 +55,25 @@ const checkout = HttpClientRequest.post("/payments/checkout").pipe(
   HttpClient.execute,
 );
 
+/**
+ * Retries the checkout until the first one, whose client has gone, has
+ * ended, and returns the replay.
+ *
+ * Until then a retry is answered 409 and then, for the one round trip to the
+ * store that adding the cookie takes, with the response as the handler
+ * returned it. Nothing but the cookie tells the test that this is over: it
+ * cannot see the first request end. A cookie that never comes fails the test
+ * by its time limit.
+ */
+const checkoutOnceSettled = Effect.gen(function* () {
+  let retry = yield* checkout;
+  while (retry.status === 409 || retry.headers["set-cookie"] === undefined) {
+    yield* Effect.sleep("1 millis");
+    retry = yield* checkout;
+  }
+  return retry;
+});
+
 /** A checkout that a middleware fails after its handler has succeeded. */
 const checkoutFailingAfter = HttpClientRequest.post("/payments/checkout").pipe(
   HttpClientRequest.setHeaders({
@@ -69,12 +88,12 @@ const control = Effect.map(
   HttpApiClient.make(Payments.Api),
   (client) => client.control,
 );
-const charges = Effect.flatMap(control, (ledger) => ledger.charges());
-const hold = Effect.flatMap(control, (ledger) => ledger.hold());
-const resume = Effect.flatMap(control, (ledger) => ledger.resume());
+export const charges = Effect.flatMap(control, (ledger) => ledger.charges());
+export const hold = Effect.flatMap(control, (ledger) => ledger.hold());
+export const resume = Effect.flatMap(control, (ledger) => ledger.resume());
 
 /** Waits until `count` charges have started. */
-const chargesReach = Effect.fnUntraced(function* (count: number) {
+export const chargesReach = Effect.fnUntraced(function* (count: number) {
   while ((yield* charges) < count) yield* Effect.sleep("1 millis");
 });
 
@@ -327,11 +346,7 @@ export const idempotencyScenarios = (
         yield* Fiber.interrupt(first);
         yield* resume;
 
-        let retry = yield* checkout;
-        while (retry.status === 409) {
-          yield* Effect.sleep("1 millis");
-          retry = yield* checkout;
-        }
+        const retry = yield* checkoutOnceSettled;
         expect(retry.headers["idempotent-replayed"]).toBe("true");
         expect(retry.headers["set-cookie"]).toContain("last-payment=pay_1");
         expect(yield* retry.json).toEqual({ id: "pay_1", amount: 1 });
@@ -348,11 +363,7 @@ export const idempotencyScenarios = (
         yield* Effect.sleep("50 millis");
         yield* resume;
 
-        let retry = yield* checkout;
-        while (retry.status === 409) {
-          yield* Effect.sleep("1 millis");
-          retry = yield* checkout;
-        }
+        const retry = yield* checkoutOnceSettled;
         expect(retry.headers["set-cookie"]).toContain("last-payment=pay_1");
         expect(yield* charges).toBe(1);
       }));

@@ -18,6 +18,24 @@ jobs:
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    # The SQL store is tested against a real server as well as the databases
+    # that run inside `bun test`: only a server runs statements at the same
+    # time. With `CI` set, the tests fail if the URL below is missing, so
+    # they cannot be left out unnoticed. The image is pinned like the actions.
+    services:
+      postgres:
+        image: postgres:17-alpine@sha256:f9cf3e1f0066f0eb0c48707d864f0ac5941e9ff454a072077d97a4d278d07d73
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/postgres
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
