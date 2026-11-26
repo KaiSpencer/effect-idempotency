@@ -45,6 +45,22 @@ describe("StoredResponse", () => {
     expect(new TextDecoder().decode(stored?.body)).toBe("first");
   });
 
+  test("gives each restored response its own copy of the body", () => {
+    const stored = StoredResponse.fromResponse(
+      HttpServerResponse.text("first"),
+    );
+    if (stored === undefined) throw new Error("The response was not stored");
+    const body = StoredResponse.toResponse(stored).body;
+    if (body._tag !== "Uint8Array")
+      throw new Error("The body was not restored as bytes");
+    body.body.fill(0);
+
+    const next = StoredResponse.toResponse(stored).body;
+    expect(
+      next._tag === "Uint8Array" && new TextDecoder().decode(next.body),
+    ).toBe("first");
+  });
+
   test("restores cookies", () => {
     const restored = roundTrip(
       HttpServerResponse.text("ok", {

@@ -41,5 +41,6 @@ export const toResponse = (
   };
   return stored.body === undefined
     ? HttpServerResponse.empty(options)
-    : HttpServerResponse.uint8Array(stored.body, options);
+    : // A copy, so that nothing done to one replay reaches the next.
+      HttpServerResponse.uint8Array(new Uint8Array(stored.body), options);
 };
