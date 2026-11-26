@@ -4,8 +4,8 @@
 server middleware that makes a retried request return the first response, and
 a client middleware that sends the same key on every retry.
 
-> **Status: in development.** Not on npm yet. The plan below is a plan, not a
-> release.
+> **Status: in development.** The npm package holds the name and one helper.
+> The plan below is a plan, not a release.
 
 ## Why
 

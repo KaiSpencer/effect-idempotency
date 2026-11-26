@@ -6,7 +6,6 @@
   "author": "KaiSpencer",
   "type": "module",
   "sideEffects": false,
-  "packageManager": "bun@1.4.5",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/KaiSpencer/effect-idempotency.git"
@@ -39,9 +38,17 @@
   "publishConfig": {
     "access": "public"
   },
+  "compilerOptions": {
+    "strict": true,
+    "exactOptionalPropertyTypes": true,
+    "noUncheckedIndexedAccess": true,
+    "lib": [
+      "es2022"
+    ]
+  },
   "scripts": {
-    "build": "rm -rf dist && tsc -p tsconfig.build.json",
-    "verify": "bun fmt --check && bun lint && bun check && bun test",
+    "build": "rm -rf dist && bun build src/index.ts --dts --packages external --target node --sourcemap=linked --outdir dist",
+    "verify": "bun fmt --check && bun lint && bun check && bun check -p tsconfig.src.json && bun test",
     "changeset": "changeset",
     "version-packages": "changeset version",
     "release": "bun scripts/release.ts",
@@ -54,7 +61,6 @@
     "@changesets/changelog-github": "^1.0.1",
     "@changesets/cli": "^3.0.3",
     "@types/bun": "^1.4.5",
-    "effect": "^4.1.5",
-    "typescript": "^7.0.2"
+    "effect": "^4.1.5"
   }
 }
