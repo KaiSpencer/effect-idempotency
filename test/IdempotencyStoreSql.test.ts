@@ -12,6 +12,7 @@ import {
   Effect,
   Exit,
   Fiber,
+  Latch,
   Layer,
   Logger,
   Scope,
@@ -23,7 +24,7 @@ import { SqlClient, SqlError, Statement } from "effect/sql";
 import { TestClock } from "effect/testing";
 import { IdempotencyKey, IdempotencyStore } from "../src/index.ts";
 import * as sqlStore from "../src/internal/sqlStore.ts";
-import { describe, expect, it } from "./support/EffectTest.ts";
+import { describe, expect, it, test } from "./support/EffectTest.ts";
 import {
   type Backend,
   backends,
@@ -67,6 +68,18 @@ const claimed = (store: Store, key: string) =>
 
 const tag = (store: Store, key: string) =>
   Effect.map(claim(store, key), (result) => result._tag);
+
+/** Waits, in real time, for `done` to hold, and says whether it came to. */
+const until = (done: Effect.Effect<boolean, unknown>) =>
+  TestClock.withLive(
+    Effect.gen(function* () {
+      for (let waited = 0; waited < 2000; waited += 5) {
+        if (yield* Effect.orDie(done)) return true;
+        yield* Effect.sleep("5 millis");
+      }
+      return false;
+    }),
+  );
 
 /**
  * A database that holds nothing, a client of it, and ways to get another
@@ -191,6 +204,32 @@ for (const backend of backends) {
         const other = yield* open();
         expect(yield* tag(other.store, "k")).toBe("Claimed");
         expect(yield* tag(named.store, "k")).toBe("InProgress");
+      }));
+
+    // PostgreSQL cuts a name off at 63 bytes, and the index is named after
+    // the table. The longest table name allowed is the one whose index name
+    // is exactly that long.
+    test("takes the longest table name that leaves room for its index's", () =>
+      Effect.gen(function* () {
+        const { open, rows, sql } = yield* setup(backend);
+        const table = "t".repeat(48);
+        const { store } = yield* open(sql, { table });
+        yield* claimed(store, "k");
+        expect(yield* rows(table)).toHaveLength(1);
+
+        const indexes = yield* sql.onDialectOrElse({
+          pg: () =>
+            sql<{ name: string }>`
+              SELECT indexname AS name FROM pg_indexes
+              WHERE schemaname = current_schema() AND tablename = ${table}`,
+          orElse: () =>
+            sql<{ name: string }>`
+              SELECT name FROM sqlite_master
+              WHERE type = 'index' AND tbl_name = ${table}`,
+        });
+        expect(indexes.map((index) => index.name)).toContain(
+          `${table}_expires_at_idx`,
+        );
       }));
 
     // The rows outlive the version of the package that wrote them, so what a
@@ -589,18 +628,38 @@ for (const backend of backends) {
         const { store, sweep } = yield* open();
         yield* insert([{ key: "k", expiresAt: 1, response: responseJson }]);
         yield* TestClock.adjust(1);
-        const pause = (millis: number) =>
-          TestClock.withLive(Effect.sleep(millis));
+        const written = yield* Latch.make(false);
+        const commit = yield* Latch.make(false);
 
-        // The claim has written the row and holds it until its transaction
-        // ends. Where there is one connection, the sweep waits for that.
+        // The claim writes the row and holds it until the test lets its
+        // transaction end.
         const claiming = yield* Effect.forkChild(
           sql.withTransaction(
-            Effect.tap(claimed(store, "k"), () => pause(150)),
+            Effect.tap(claimed(store, "k"), () =>
+              Effect.andThen(written.open, commit.await),
+            ),
           ),
         );
-        yield* pause(50);
-        expect(yield* sweep).toBe(0);
+        yield* written.await;
+        const sweeping = yield* Effect.forkChild(sweep);
+        if (backend.serial) {
+          // The sweep waits for the connection, and there is nothing to see
+          // of that from outside. It runs once the transaction has ended.
+          yield* TestClock.withLive(Effect.sleep("20 millis"));
+        } else {
+          // The sweep has reached the row and waits for the claim to commit.
+          const waiting = Effect.map(
+            sql<{ waiting: number | bigint | string }>`
+              SELECT COUNT(*) AS waiting FROM pg_stat_activity
+              WHERE wait_event_type = 'Lock'
+                AND datname = current_database()
+                AND pid <> pg_backend_pid()`,
+            (found) => Number(found[0]?.waiting) > 0,
+          );
+          expect(yield* until(waiting)).toBe(true);
+        }
+        yield* commit.open;
+        expect(yield* Fiber.join(sweeping)).toBe(0);
 
         const held = yield* Fiber.join(claiming);
         expect(yield* tag(store, "k")).toBe("InProgress");
@@ -680,19 +739,7 @@ for (const backend of backends) {
         const { insert, open, rows, sql } = yield* setup(backend);
         yield* open();
         const table = sql(sqlStore.defaultTable);
-        const live = TestClock.withLive;
         const warnings: Array<unknown> = [];
-        /** Waits, in real time, for `done` to hold. */
-        const until = (done: Effect.Effect<boolean, unknown>) =>
-          live(
-            Effect.gen(function* () {
-              for (let waited = 0; waited < 2000; waited += 5) {
-                if (yield* Effect.orDie(done)) return true;
-                yield* Effect.sleep("5 millis");
-              }
-              return false;
-            }),
-          );
         const swept = until(Effect.map(rows(), (found) => found.length === 0));
 
         yield* insert([{ key: "first", expiresAt: 0, response: responseJson }]);
@@ -739,11 +786,14 @@ for (const backend of backends) {
         const { open, sql } = yield* setup(backend);
         const { store } = yield* open();
 
-        yield* Effect.flip(
-          sql.withTransaction(
-            Effect.andThen(claimed(store, "k"), Effect.fail("rolled back")),
+        // The error is the test's own: the claim before it was made.
+        expect(
+          yield* Effect.flip(
+            sql.withTransaction(
+              Effect.andThen(claimed(store, "k"), Effect.fail("rolled back")),
+            ),
           ),
-        );
+        ).toBe("rolled back");
         expect(yield* tag(store, "k")).toBe("Claimed");
       }));
 
@@ -764,9 +814,14 @@ for (const backend of backends) {
           store.complete(first, response, retention),
         );
 
-        yield* Effect.flip(
-          sql.withTransaction(Effect.andThen(pay, Effect.fail("rolled back"))),
-        );
+        // The error is the test's own: both writes before it were made.
+        expect(
+          yield* Effect.flip(
+            sql.withTransaction(
+              Effect.andThen(pay, Effect.fail("rolled back")),
+            ),
+          ),
+        ).toBe("rolled back");
         expect(yield* payments).toBe(0);
         expect(yield* tag(store, "k")).toBe("InProgress");
 
@@ -778,6 +833,50 @@ for (const backend of backends) {
 }
 
 describe("layerSql", () => {
+  test("says why a table name cannot be used", () => {
+    expect(sqlStore.refuseTable("effect_idempotency")).toBeUndefined();
+    expect(sqlStore.refuseTable('Idempotency "Keys"')).toBeUndefined();
+    expect(sqlStore.refuseTable("")).toContain("empty");
+    expect(sqlStore.refuseTable("app.keys")).toContain("dot");
+    // 48 bytes are allowed, in whatever characters they come.
+    expect(sqlStore.refuseTable("t".repeat(48))).toBeUndefined();
+    expect(sqlStore.refuseTable("t".repeat(49))).toContain("48 bytes");
+    expect(sqlStore.refuseTable("ż".repeat(24))).toBeUndefined();
+    expect(sqlStore.refuseTable("ż".repeat(25))).toContain("48 bytes");
+    expect(sqlStore.refuseTable("🔑".repeat(12))).toBeUndefined();
+    expect(sqlStore.refuseTable("🔑".repeat(13))).toContain("48 bytes");
+  });
+
+  it.effect(
+    "does not build, and makes no table, for a name it cannot use",
+    () =>
+      Effect.gen(function* () {
+        const sql = yield* SqliteClient.make({ filename: ":memory:" }).pipe(
+          Effect.provide(Reactivity.layer),
+        );
+        // A schema of that name exists, so the table could have been made.
+        yield* sql`ATTACH DATABASE ':memory:' AS app`;
+        for (const table of ["app.keys", "t".repeat(49)]) {
+          const exit = yield* Effect.exit(
+            Layer.build(
+              Layer.provide(
+                IdempotencyStore.layerSql({ table }),
+                Layer.succeed(SqlClient.SqlClient, sql),
+              ),
+            ),
+          );
+          expect(String(Exit.isFailure(exit) ? exit.cause : "")).toContain(
+            "cannot use the table",
+          );
+        }
+        for (const schema of ["main", "app"]) {
+          expect(
+            yield* sql`SELECT name FROM ${sql(schema)}.sqlite_master`,
+          ).toEqual([]);
+        }
+      }),
+  );
+
   // An application often has its client turn `camelCase` into `snake_case`.
   // The store's statements must not go through that.
   it.effect("uses its own names, whatever the client renames", () =>

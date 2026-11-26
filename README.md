@@ -148,11 +148,12 @@ with it. It is kept for `retention`, 24 hours by
 default, counted from when the handler finished. After that the key is new.
 
 The response is stored when the handler returns, and stored again once such a
-change has been made, just before it is sent. A retry that arrives between the
-two is answered with the response as the handler returned it, without the
-change. With a store in a database that is the time of one write, a few
-milliseconds, and it only concerns a retry sent while the first request is
-still being answered.
+change has been made, just before it is sent. Until that second write has
+succeeded, a retry is answered with the response as the handler returned it,
+without the change. That is the rest of the request's own work and one write
+to the store, a few milliseconds with a database, and it only concerns a
+retry sent while the first request is still being answered. If the second
+write fails, it is logged and the response without the change stays stored.
 
 **What is not stored.** Nothing is stored and the key is released when the
 handler fails with one of its errors, dies, or answers `400` or above, and
@@ -241,10 +242,14 @@ running. Retry after a short wait.
 
 `layerSql` needs the `SqlClient` of a PostgreSQL or SQLite database, from any
 of Effect's clients for them. On another database the layer fails to build.
+SQLite must be 3.35 or later, the first with `RETURNING`: on an older one the
+layer builds and every claim fails.
 
 **The table.** The layer creates one table and one index when it is built, if
 they do not exist, so the database user needs the right to create them. Pass
-`layerSql({ table: "..." })` for another name than `effect_idempotency`.
+`layerSql({ table: "..." })` for another name than `effect_idempotency`: one
+name of at most 48 bytes, without a dot, so not a table in another schema. The
+layer fails to build on any other name.
 
 ```sql
 CREATE TABLE effect_idempotency (
@@ -272,12 +277,16 @@ or with the stored response, rewrites the row unchanged to read it.
 **Old rows.** For as long as the layer is built it deletes, every five
 minutes and in batches of 1000, the responses whose retention is over. A
 claim that never finished, which is what a process that died leaves behind, is
-deleted 24 hours after its lock expired. Until then the request that made it
-can still store its response, if nobody has taken the key.
+deleted once its lock has been expired for 24 hours. Until then the request
+that made it can still store its response, if nobody has taken the key.
 
-**Clocks.** A key expires by the `Clock` of the server that wrote it, not by
-the database's. Two servers whose clocks differ disagree by that much about
-when a lock has expired. Keep it a small part of `lockExpiry`.
+**Clocks.** Times come from the `Clock` of each server, not from the
+database. One server writes when a key expires and another may be the one to
+read it, so two servers whose clocks differ disagree by that much about when a
+lock has expired and when a retention is over: a response can be gone that
+much early. Keep the difference a small part of `lockExpiry` and of
+`retention`. The lock is counted from when the request asks for the key, so
+the time it waits for a database connection is taken from `lockExpiry` too.
 
 **Transactions.** The store uses the connection the request is on. A claim
 made inside a transaction is invisible to other requests until it commits,

@@ -441,6 +441,33 @@ export const storeContract = (
         });
       }));
 
+    // Without this rule the answer would depend on whether the store had
+    // got round to deleting the expired response, which nobody can know.
+    test("does not store a response again once its retention is over", () =>
+      Effect.gen(function* () {
+        const store = yield* IdempotencyStore.IdempotencyStore;
+        const first = yield* claimed("k");
+        yield* store.complete(first, response, retention);
+
+        yield* TestClock.adjust(
+          Duration.subtract(retention, Duration.millis(1)),
+        );
+        yield* store.complete(first, { ...response, status: 202 }, retention);
+        yield* TestClock.adjust(Duration.millis(1));
+        // The second completion counted its retention from when it was made.
+        expect(yield* claim("k")).toMatchObject({
+          _tag: "Completed",
+          response: { status: 202 },
+        });
+
+        // To the millisecond in which that retention ends.
+        yield* TestClock.adjust(
+          Duration.subtract(retention, Duration.millis(1)),
+        );
+        yield* store.complete(first, response, retention);
+        expect((yield* claim("k"))._tag).toBe("Claimed");
+      }));
+
     test("does not let a completed claim replace the response of its successor", () =>
       Effect.gen(function* () {
         const store = yield* IdempotencyStore.IdempotencyStore;

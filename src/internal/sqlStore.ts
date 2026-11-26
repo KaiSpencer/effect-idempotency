@@ -14,7 +14,8 @@ import {
 export interface Options {
   /**
    * The table the keys are kept in, created if it does not exist. One name,
-   * without a schema. Defaults to `effect_idempotency`.
+   * without a schema and so without a dot, of at most 48 bytes. Defaults to
+   * `effect_idempotency`.
    */
   readonly table?: string | undefined;
 }
@@ -47,6 +48,40 @@ const time = (millis: number): bigint =>
 
 const fail = (cause: unknown) => new IdempotencyStoreError({ cause });
 
+const indexSuffix = "_expires_at_idx";
+
+/** The longest name PostgreSQL keeps whole. It cuts off the rest. */
+const maxIdentifierBytes = 63;
+
+/** The length of `text` in UTF-8, without a `TextEncoder`, which is not ES2022. */
+const utf8Length = (text: string): number => {
+  let bytes = 0;
+  for (const character of text) {
+    const point = character.codePointAt(0) ?? 0;
+    bytes += point < 0x80 ? 1 : point < 0x800 ? 2 : point < 0x10000 ? 3 : 4;
+  }
+  return bytes;
+};
+
+/**
+ * Why `name` cannot be the table, if it cannot.
+ *
+ * - `sql("a.b")` is the table `b` in the schema `a`, and an index cannot be
+ *   named with a schema, so the table would be made and the index refused.
+ * - PostgreSQL cuts a name off at 63 bytes. The index of a longer table name
+ *   would get the name of the table itself, and `IF NOT EXISTS` would then
+ *   skip it without a word.
+ */
+export const refuseTable = (name: string): string | undefined => {
+  if (name === "") return "it is empty";
+  if (name.includes(".")) {
+    return "it has a dot, and a table in another schema is not supported";
+  }
+  const most = maxIdentifierBytes - indexSuffix.length;
+  if (utf8Length(name) > most) return `it is longer than ${most} bytes`;
+  return undefined;
+};
+
 /**
  * The store, and the sweep the layer runs on a schedule, which the tests run
  * by hand. The sweep returns how many rows it deleted.
@@ -69,6 +104,14 @@ export const makeWithSweep = Effect.fnUntraced(function* (
   const sql = (yield* SqlClient.SqlClient).withoutTransforms();
   const random = yield* SecureRandom.SecureRandom;
   const name = options?.table ?? defaultTable;
+  const refused = refuseTable(name);
+  if (refused !== undefined) {
+    return yield* Effect.die(
+      new Error(
+        `effect-idempotency: IdempotencyStore.layerSql cannot use the table ${JSON.stringify(name)}: ${refused}`,
+      ),
+    );
+  }
   const table = sql(name);
 
   // The statements below are written once for both: an upsert with
@@ -100,7 +143,7 @@ export const makeWithSweep = Effect.fnUntraced(function* (
       )
     `,
     sql`
-      CREATE INDEX IF NOT EXISTS ${sql(`${name}_expires_at_idx`)}
+      CREATE INDEX IF NOT EXISTS ${sql(`${name}${indexSuffix}`)}
       ON ${table} (expires_at)
     `,
   ).pipe(Effect.retry({ times: 3 }), Effect.orDie);
@@ -120,6 +163,9 @@ export const makeWithSweep = Effect.fnUntraced(function* (
   );
 
   /**
+   * The lock is counted from when the request asked, so the time the
+   * statement waits for a connection is taken from `lockExpiry`.
+   *
    * One statement, so that it is atomic without a transaction. It writes the
    * new claim where the key is free, which is where there is no row or the
    * row has expired, and otherwise writes the row back as it was. Either way
@@ -175,6 +221,8 @@ export const makeWithSweep = Effect.fnUntraced(function* (
   const owned = (claim: Claim) =>
     sql`scope = ${claim.scope} AND idempotency_key = ${claim.key} AND token = ${claim.token}`;
 
+  // A response past its retention is gone, whether or not a sweep has
+  // deleted its row yet, so a claim cannot bring it back.
   const complete: IdempotencyStore["Service"]["complete"] = Effect.fnUntraced(
     function* (claim, response, retention) {
       const now = yield* Clock.currentTimeMillis;
@@ -184,6 +232,7 @@ export const makeWithSweep = Effect.fnUntraced(function* (
         SET response = ${json},
             expires_at = ${time(now + Duration.toMillis(retention))}
         WHERE ${owned(claim)}
+          AND (response IS NULL OR expires_at > ${time(now)})
       `;
     },
     Effect.mapError(fail),

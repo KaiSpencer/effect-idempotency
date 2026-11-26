@@ -27,6 +27,11 @@ import { test } from "./EffectTest.ts";
 export interface Backend {
   readonly name: string;
   /**
+   * Whether the database has one connection, so that a statement waits for
+   * the one before it, and for a transaction to end.
+   */
+  readonly serial: boolean;
+  /**
    * Makes a database that holds nothing and removes it when the scope
    * closes. Build the layer once for each client the test needs.
    */
@@ -43,6 +48,7 @@ export interface Backend {
 
 const sqlite: Backend = {
   name: "SQLite",
+  serial: true,
   modelRuns: 100,
   timeout: 20_000,
   database: Effect.map(
@@ -81,6 +87,7 @@ const pgliteClient = Effect.promise(() => {
 
 const pglite: Backend = {
   name: "PGlite",
+  serial: true,
   modelRuns: 30,
   timeout: 30_000,
   database: Effect.gen(function* () {
@@ -103,6 +110,7 @@ const postgresUrl = process.env.TEST_POSTGRES_URL;
 
 const postgres = (url: string): Backend => ({
   name: "PostgreSQL",
+  serial: false,
   modelRuns: 30,
   timeout: 30_000,
   database: Effect.gen(function* () {
