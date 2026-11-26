@@ -31,7 +31,9 @@ the file. On `0.x`, a feature or a fix is a `patch` and a breaking change is a
 
 1. A push to `main` with pending changesets opens or updates a pull request
    named "chore: version packages", which bumps the version and writes
-   `CHANGELOG.md`.
+   `CHANGELOG.md`. GitHub holds that pull request's own checks for approval,
+   because a workflow opened it, so the release job dispatches `ci.yml` on
+   its branch instead. Ignore the "workflow awaiting approval" notice.
 2. Merging that pull request runs `scripts/release.ts`: it stages the new
    version on npm and creates the GitHub release and tag.
 3. A maintainer approves the staged version with two-factor authentication:

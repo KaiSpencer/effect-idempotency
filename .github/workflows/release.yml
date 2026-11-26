@@ -22,6 +22,7 @@ jobs:
     permissions:
       contents: write # the version commit, the tag, the GitHub release
       pull-requests: write # the "Version Packages" pull request
+      actions: write # dispatch ci.yml for the version pull request
       id-token: write # npm Trusted Publishing (OIDC), no stored token
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -36,8 +37,9 @@ jobs:
           node-version: 26
           registry-url: https://registry.npmjs.org
       - run: bun install --frozen-lockfile
-      - run: bun test
-      - uses: changesets/action@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
+      - run: bun run verify
+      - id: changesets
+        uses: changesets/action@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2
         with:
           version-script: bun run version-packages
           publish-script: bun run release
@@ -50,3 +52,10 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NPM_PUBLISH: ${{ vars.NPM_PUBLISH }}
+      # GitHub holds the pull_request runs of a pull request opened with
+      # GITHUB_TOKEN until a maintainer approves them. A dispatched run needs
+      # no approval, and its checks land on the same commit.
+      - if: steps.changesets.outputs.has-changesets == 'true'
+        run: gh workflow run ci.yml --ref changeset-release/main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

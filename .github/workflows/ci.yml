@@ -2,6 +2,8 @@ name: ci
 
 on:
   pull_request:
+  # The release job dispatches this for the version pull request.
+  workflow_dispatch:
   push:
     branches: [main]
 
