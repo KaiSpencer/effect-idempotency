@@ -106,12 +106,9 @@ const runDashboard = Effect.fn("runDashboard")(function* (
 
   let [model, command] = step;
   while (true) {
-    switch (command._tag) {
-      case "Quit":
-      case "Approve": {
-        const exit: Exit = [model, command];
-        return exit;
-      }
+    if (command._tag === "Quit" || command._tag === "Approve") {
+      const exit: Exit = [model, command];
+      return exit;
     }
     yield* display(screen.clear + Dashboard.view(model));
     const msg =

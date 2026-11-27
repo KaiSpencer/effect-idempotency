@@ -47,8 +47,8 @@ const snippet = (file: string, region: string | undefined): Array<string> => {
 
 const plain = (code: string, twoslash: boolean): string => {
   let lines = code.split("\n").flatMap((line) => {
-    const include = includePattern.exec(line);
-    return include === null ? [line] : snippet(include[1]!, include[2]);
+    const [, file, region] = includePattern.exec(line) ?? [];
+    return file === undefined ? [line] : snippet(file, region);
   });
   if (twoslash) {
     lines = lines.slice(lines.lastIndexOf("// ---cut---") + 1);

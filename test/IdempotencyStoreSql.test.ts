@@ -294,8 +294,10 @@ for (const backend of backends) {
         );
 
         expect(stores).toHaveLength(8);
-        expect(yield* tag(stores[0]!.store, "k")).toBe("Claimed");
-        expect(yield* tag(stores[7]!.store, "k")).toBe("InProgress");
+        expect(yield* tag(Arr.getUnsafe(stores, 0).store, "k")).toBe("Claimed");
+        expect(yield* tag(Arr.getUnsafe(stores, 7).store, "k")).toBe(
+          "InProgress",
+        );
       }));
   });
 
