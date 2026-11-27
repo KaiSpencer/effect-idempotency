@@ -24,6 +24,22 @@ jobs:
       pull-requests: write # the "Version Packages" pull request
       actions: write # dispatch ci.yml for the version pull request
       id-token: write # npm Trusted Publishing (OIDC), no stored token
+    # `bun run verify` below runs the PostgreSQL tests, which fail in CI
+    # without a server. Keep this in step with the `check` job of ci.yml.
+    services:
+      postgres:
+        image: postgres:17-alpine@sha256:f9cf3e1f0066f0eb0c48707d864f0ac5941e9ff454a072077d97a4d278d07d73
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      TEST_POSTGRES_URL: postgres://postgres:postgres@localhost:5432/postgres
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # npm stages the release (`bun publish` has no OIDC and no staged
