@@ -5,6 +5,43 @@ minimumReleaseAge = 259200
 [lint]
 # Also run the rules that need type information.
 typeAware = true
+# A warning fails the run, as an error does, so warnings cannot pile up. To
+# allow something, turn the rule off below, or disable it on the one line with
+# a comment that says why. An `eslint-disable` that disables nothing also fails.
+maxWarnings = 0
+
+# Stricter than the defaults.
+[lint.rules]
+# No `any`, written or inferred: the defaults already catch an `any` that
+# flows in from elsewhere (`no-unsafe-*`).
+"typescript/no-explicit-any" = "error"
+# `!` undoes `noUncheckedIndexedAccess`. Check the value, or use Option.
+"typescript/no-non-null-assertion" = "error"
+"typescript/switch-exhaustiveness-check" = "error"
+"typescript/no-unnecessary-condition" = [
+  "error",
+  { allowConstantLoopConditions = true },
+]
+"typescript/no-unnecessary-type-arguments" = "error"
+"typescript/no-unnecessary-template-expression" = "error"
+"typescript/no-unnecessary-boolean-literal-compare" = "error"
+"typescript/no-meaningless-void-operator" = "error"
+# Promises and values that do not mean what they look like.
+"typescript/no-floating-promises" = "error"
+"typescript/no-misused-promises" = "error"
+"typescript/no-misused-spread" = "error"
+"typescript/no-base-to-string" = "error"
+"typescript/restrict-template-expressions" = "error"
+"typescript/restrict-plus-operands" = "error"
+"typescript/only-throw-error" = "error"
+"typescript/use-unknown-in-catch-callback-variable" = "error"
+"typescript/prefer-nullish-coalescing" = "error"
+"typescript/no-deprecated" = "error"
+"eslint/eqeqeq" = ["error", "smart"]
+# Imports that `verbatimModuleSyntax` keeps exactly as written.
+"typescript/consistent-type-imports" = "error"
+"typescript/consistent-type-exports" = "error"
+"typescript/no-import-type-side-effects" = "error"
 
 [test]
 # `repos/` holds other projects' source and test suites, for reference only.

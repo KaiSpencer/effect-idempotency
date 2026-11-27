@@ -54,6 +54,9 @@ jobs:
       - name: Install the pinned Bun
         run: npm install --global "$(node -p 'require("./package.json").packageManager')"
       - run: bun install --frozen-lockfile
+      # The lint covers the documentation site too: see ci.yml.
+      - run: bun install --frozen-lockfile
+        working-directory: docs
       - run: bun run verify
       - id: changesets
         uses: changesets/action@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2.1.2

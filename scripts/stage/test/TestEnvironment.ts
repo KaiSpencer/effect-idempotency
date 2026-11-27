@@ -108,8 +108,14 @@ export const fakeNpm = (options: FakeNpmOptions) => {
                 reviewing || !s.inReview
                   ? s
                   : new StagedVersion({
-                      ...s,
+                      id: s.id,
+                      packageName: s.packageName,
+                      version: s.version,
+                      tag: s.tag,
                       status: StageStatus.make("staged"),
+                      createdAt: s.createdAt,
+                      actor: s.actor,
+                      shasum: s.shasum,
                     }),
               ),
               newestFirst,
