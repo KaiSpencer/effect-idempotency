@@ -31,6 +31,14 @@ version.
 Relative imports carry the `.ts` extension. `tsconfig.src.json` typechecks
 `src/` without Bun's types, so the library cannot lean on a Bun global.
 
+Nothing is left as a warning. `bun lint` fails on a warning as it does on an
+error (`maxWarnings = 0` in `bunfig.toml`), and the compiler options make
+unused code, unreachable code and missing returns errors. There is no `any`,
+written or let in from an untyped value: decode outside data with `Schema`
+instead. When a rule is wrong somewhere, disable it on that line with a comment
+that says why, or turn it off in `bunfig.toml`. The lint type-checks the
+documentation site as well, so `verify` installs the site's packages first.
+
 ## Tests
 
 `bun test` runs everything. The tests come in five kinds:

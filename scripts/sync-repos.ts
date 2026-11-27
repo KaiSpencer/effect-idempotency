@@ -9,6 +9,7 @@
  * nothing in CI and, run that way, warns instead of failing when offline.
  */
 import { $ } from "bun";
+import { Schema } from "effect";
 
 interface Repo {
   readonly name: string;
@@ -24,10 +25,12 @@ const repos: ReadonlyArray<Repo> = [
   },
 ];
 
+const Manifest = Schema.Struct({ version: Schema.String });
+
 const installedVersion = async (name: string): Promise<string> => {
-  const manifest: { version: string } = await Bun.file(
-    `node_modules/${name}/package.json`,
-  ).json();
+  const manifest = Schema.decodeUnknownSync(Manifest)(
+    await Bun.file(`node_modules/${name}/package.json`).json(),
+  );
   return manifest.version;
 };
 

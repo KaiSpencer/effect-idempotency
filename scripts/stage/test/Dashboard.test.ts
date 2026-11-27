@@ -30,7 +30,9 @@ const confirmingVersion = (model: Dashboard.Model) =>
   );
 
 // Newest first, as npm stage list is read.
-const versions = [stagedVersion("0.2.0"), stagedVersion("0.1.0")];
+const newer = stagedVersion("0.2.0");
+const older = stagedVersion("0.1.0");
+const versions = [newer, older];
 
 describe("Dashboard.update", () => {
   test("starts by loading", () => {
@@ -53,7 +55,7 @@ describe("Dashboard.update", () => {
 
   test("enter on the confirmation approves", () => {
     const [, command] = after(versions, ["return", "return"]);
-    expect(command).toEqual(Command.Approve({ staged: versions[0]! }));
+    expect(command).toEqual(Command.Approve({ staged: newer }));
   });
 
   test("other keys on the confirmation do not approve", () => {
@@ -95,10 +97,7 @@ describe("Dashboard.update", () => {
 
   test("keeps the cursor on the list when it shrinks", () => {
     const [moved] = after(versions, ["down"]);
-    const [model] = Dashboard.update(
-      moved,
-      Msg.Loaded({ staged: [versions[0]!] }),
-    );
+    const [model] = Dashboard.update(moved, Msg.Loaded({ staged: [newer] }));
     expect(model.cursor).toBe(0);
   });
 
@@ -118,14 +117,14 @@ describe("Dashboard.update", () => {
 describe("Dashboard.update after approving", () => {
   const approved = () => {
     const [model] = after(versions, ["return"]);
-    return Dashboard.update(model, Msg.Approved({ staged: versions[0]! }));
+    return Dashboard.update(model, Msg.Approved({ staged: newer }));
   };
 
   test("refreshes and marks the version as publishing", () => {
     const [model, command] = approved();
     expect(command).toEqual(Command.Refresh());
     expect(model.confirming).toEqual(Option.none());
-    expect(Dashboard.progressOf(model, versions[0]!)).toBe("publishing");
+    expect(Dashboard.progressOf(model, newer)).toBe("publishing");
     expect(Dashboard.awaitsNpm(model)).toBe(true);
   });
 
@@ -134,17 +133,17 @@ describe("Dashboard.update after approving", () => {
       approved()[0],
       Msg.Loaded({ staged: versions }),
     );
-    expect(Dashboard.progressOf(model, versions[0]!)).toBe("publishing");
+    expect(Dashboard.progressOf(model, newer)).toBe("publishing");
     expect(model.published).toEqual([]);
   });
 
   test("published once npm no longer lists it", () => {
     const [model] = Dashboard.update(
       approved()[0],
-      Msg.Loaded({ staged: [versions[1]!] }),
+      Msg.Loaded({ staged: [older] }),
     );
     expect(model.publishing).toEqual([]);
-    expect(model.published).toEqual([versions[0]!]);
+    expect(model.published).toEqual([newer]);
     expect(model.notice).toEqual(
       Option.some(
         Dashboard.Notice.Success({

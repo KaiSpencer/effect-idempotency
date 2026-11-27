@@ -46,6 +46,10 @@ jobs:
       - name: Install the pinned Bun
         run: npm install --global "$(node -p 'require("./package.json").packageManager')"
       - run: bun install --frozen-lockfile
+      # The lint covers the documentation site too, whose files need its
+      # packages to be type checked. `verify` installs them, but not frozen.
+      - run: bun install --frozen-lockfile
+        working-directory: docs
       - run: bun run verify
       - run: bun run build
       - run: bun pm pack --dry-run
