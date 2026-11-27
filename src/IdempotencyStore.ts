@@ -9,8 +9,11 @@
  * @module
  */
 import { Context, type Duration, type Effect, Layer, Schema } from "effect";
+import { SecureRandom } from "effect/crypto";
+import type { SqlClient } from "effect/sql";
 import type { IdempotencyKey } from "./IdempotencyKey.ts";
 import * as memoryStore from "./internal/memoryStore.ts";
+import * as sqlStore from "./internal/sqlStore.ts";
 
 /**
  * What makes two requests the same request. The middleware computes it and a
@@ -103,7 +106,8 @@ export class IdempotencyStore extends Context.Service<
      * from now, after which the key is free again. A claim can complete more
      * than once, and the last response replaces the one before: the
      * middleware does so when the response changes before it is sent. Does
-     * nothing if the claim is void.
+     * nothing if the claim is void, or if its response has been stored and
+     * the retention of that response is over.
      */
     readonly complete: (
       claim: Claim,
@@ -130,3 +134,34 @@ export const layerMemory: Layer.Layer<IdempotencyStore> = Layer.effect(
   IdempotencyStore,
   memoryStore.make,
 );
+
+/** The options of {@link layerSql}. */
+export type SqlOptions = sqlStore.Options;
+
+/**
+ * A store in a SQL database, through the `SqlClient` the application already
+ * provides. It supports PostgreSQL and SQLite 3.35 or later, and the layer
+ * fails to build on another database.
+ *
+ * Every server that shares the database shares the keys, and they survive a
+ * restart. The layer creates its table and an index if they do not exist, so
+ * the database user needs the right to. For as long as the layer is built it
+ * also deletes, every few minutes, the responses past their retention and the
+ * claims a dead process left behind.
+ *
+ * A key expires by the `Clock` of the server that reads it, against a time
+ * the server that wrote it set. Keep the servers' clocks within a small part
+ * of the lock expiry and of the retention of each other.
+ *
+ * ```ts
+ * const StoreLive = IdempotencyStore.layerSql().pipe(
+ *   Layer.provide(PgClient.layer({ url })),
+ * )
+ * ```
+ */
+export const layerSql = (
+  options?: SqlOptions,
+): Layer.Layer<IdempotencyStore, never, SqlClient.SqlClient> =>
+  Layer.effect(IdempotencyStore, sqlStore.make(options)).pipe(
+    Layer.provide(SecureRandom.layerWebCrypto),
+  );

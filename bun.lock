@@ -8,6 +8,9 @@
         "@changesets/changelog-github": "^1.0.1",
         "@changesets/cli": "^3.0.3",
         "@effect/platform-bun": "^4.1.5",
+        "@effect/sql-pg": "^4.1.5",
+        "@effect/sql-pglite": "^4.1.5",
+        "@effect/sql-sqlite-bun": "^4.1.5",
         "@types/bun": "^1.4.5",
         "effect": "^4.1.5",
       },
@@ -58,6 +61,14 @@
     "@effect/platform-bun": ["@effect/platform-bun@4.1.5", "", { "dependencies": { "@effect/platform-node-shared": "4.1.5" }, "peerDependencies": { "effect": "^4.1.5" } }, "sha512-VzUugWhIKQSWp/xtFrYIrCISDcUXWrCFfxSkqg8ul0DZgo23WRqfz+38Y3mJ2NenUv5kUj14FnjLohm2t8ZGCw=="],
 
     "@effect/platform-node-shared": ["@effect/platform-node-shared@4.1.5", "", { "dependencies": { "@types/ws": "^8.18.2", "ws": "^8.23.0" }, "peerDependencies": { "effect": "^4.1.5" } }, "sha512-JzlrYe4uKaBFTWihBRXo2pDjkUVB39kQpKdGfXdbp7Co5sKT8hbcjOmdB5pg/WOYESdGTddd3fxD4lwlZELbZQ=="],
+
+    "@effect/sql-pg": ["@effect/sql-pg@4.1.5", "", { "peerDependencies": { "effect": "^4.1.5" } }, "sha512-Fs/5EmXykN4vKzWES54aRSLts0jBiQn65Y2jnGq//IX8Qj2McB7+WGYwaGNwxXUq4mXvagGWZPNMO0GefwDpQw=="],
+
+    "@effect/sql-pglite": ["@effect/sql-pglite@4.1.5", "", { "dependencies": { "@electric-sql/pglite": "^0.5.16" }, "peerDependencies": { "effect": "^4.1.5" } }, "sha512-E2kEB9PI9DRs+1nSLPxFsj2w43fGnl8gEgJJNqHqEk/3d0Z7D8JiAYQROZRPd8SB5a9Gt4VsRDdE259syvwUmg=="],
+
+    "@effect/sql-sqlite-bun": ["@effect/sql-sqlite-bun@4.1.5", "", { "peerDependencies": { "effect": "^4.1.5" } }, "sha512-HkO/wJTOFuZjGYLA1kJWod21C5JkCKdCPJ/IZ+Hey6xYx2cob0A01fFxenazXfQca4xnCqNnfbO3joNowIJByw=="],
+
+    "@electric-sql/pglite": ["@electric-sql/pglite@0.5.17", "", {}, "sha512-8SvKjiUjaU+0O0dbxjOfN+jXz14TEqDWbwDkYOW1aQ11y/ph2JvFVI27ABBo5nfw+ZfSqy4hKCNlbnbB1TDE+g=="],
 
     "@manypkg/find-root": ["@manypkg/find-root@3.1.0", "", { "dependencies": { "@manypkg/tools": "^2.1.0" } }, "sha512-BcSqCyKhBVZ5YkSzOiheMCV41kqAFptW6xGqYSTjkVTl9XQpr+pqHhwgGCOHQtjDCv7Is6EFyA14Sm5GVbVABA=="],
 

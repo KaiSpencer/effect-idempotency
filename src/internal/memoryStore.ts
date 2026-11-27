@@ -92,6 +92,9 @@ export const makeWithSize: Effect.Effect<{
           const id = entryId(claim.scope, claim.key);
           const entry = entries.get(id);
           if (entry === undefined || entry.token !== claim.token) return;
+          // A response past its retention is gone, whether or not a sweep
+          // has removed it yet.
+          if (entry.response !== undefined && entry.expiresAt <= now) return;
           entries.set(id, {
             ...entry,
             expiresAt: now + Duration.toMillis(retention),
