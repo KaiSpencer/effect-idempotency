@@ -18,6 +18,7 @@ bun lint --fix    # lint and apply fixes
 bun check         # typecheck
 bun test          # tests
 bun run build     # bundle src/index.ts into dist/, with declarations
+bun run docs      # the documentation site, at http://localhost:5173
 bun stage         # publish a version the release workflow staged on npm
 ```
 
@@ -92,15 +93,13 @@ test can ask "did the handler run twice?" over HTTP.
 The documentation site is in `docs/`, built with [Vocs](https://vocs.dev). It
 is a package of its own, with its own lockfile, so that React and Vite stay
 out of the library's install. Its examples import `effect` from the
-repository root, so install both:
+repository root, so run `bun install` there first. These run from the root,
+and install the site's own dependencies when they are missing:
 
 ```bash
-bun install            # in the root, if not done yet
-cd docs
-bun install
-bun run dev            # the site, at http://localhost:5173
-bun run check          # typecheck the config and the snippets
-bun run build          # what CI runs
+bun run docs           # the site, at http://localhost:5173
+bun run docs:check     # typecheck the config and the snippets
+bun run docs:build     # build it, as CI does
 ```
 
 - **Pages** are MDX files in `docs/src/pages`. A new page also goes in the
