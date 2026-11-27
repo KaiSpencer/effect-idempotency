@@ -11,7 +11,7 @@
     "type": "git",
     "url": "git+https://github.com/KaiSpencer/effect-idempotency.git"
   },
-  "homepage": "https://github.com/KaiSpencer/effect-idempotency#readme",
+  "homepage": "https://effect-idempotency.vercel.app",
   "bugs": {
     "url": "https://github.com/KaiSpencer/effect-idempotency/issues"
   },
