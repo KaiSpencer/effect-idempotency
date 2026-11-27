@@ -632,11 +632,24 @@ for (const backend of backends) {
         const commit = yield* Latch.make(false);
 
         // The claim writes the row and holds it until the test lets its
-        // transaction end.
+        // transaction end. On a server, it also says which connection it is
+        // on, so that the test can tell who waits for it.
+        let claimBackend = 0;
+        const noteBackend = backend.serial
+          ? Effect.void
+          : Effect.map(
+              sql<{ pid: number }>`SELECT pg_backend_pid() AS pid`,
+              (found) => {
+                claimBackend = Number(found[0]?.pid);
+              },
+            );
         const claiming = yield* Effect.forkChild(
           sql.withTransaction(
             Effect.tap(claimed(store, "k"), () =>
-              Effect.andThen(written.open, commit.await),
+              Effect.andThen(
+                noteBackend,
+                Effect.andThen(written.open, commit.await),
+              ),
             ),
           ),
         );
@@ -647,13 +660,13 @@ for (const backend of backends) {
           // of that from outside. It runs once the transaction has ended.
           yield* TestClock.withLive(Effect.sleep("20 millis"));
         } else {
-          // The sweep has reached the row and waits for the claim to commit.
+          // The sweep has reached the row and waits for the claim to
+          // commit: a connection is blocked by the claim's, and nothing but
+          // the sweep touches a row of this test's schema.
           const waiting = Effect.map(
             sql<{ waiting: number | bigint | string }>`
               SELECT COUNT(*) AS waiting FROM pg_stat_activity
-              WHERE wait_event_type = 'Lock'
-                AND datname = current_database()
-                AND pid <> pg_backend_pid()`,
+              WHERE ${claimBackend} = ANY (pg_blocking_pids(pid))`,
             (found) => Number(found[0]?.waiting) > 0,
           );
           expect(yield* until(waiting)).toBe(true);

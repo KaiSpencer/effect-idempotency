@@ -150,10 +150,13 @@ default, counted from when the handler finished. After that the key is new.
 The response is stored when the handler returns, and stored again once such a
 change has been made, just before it is sent. Until that second write has
 succeeded, a retry is answered with the response as the handler returned it,
-without the change. That is the rest of the request's own work and one write
-to the store, a few milliseconds with a database, and it only concerns a
-retry sent while the first request is still being answered. If the second
-write fails, it is logged and the response without the change stays stored.
+without the change. How long that is depends on what the request still does
+after its handler, and on one write to the store. Unless a middleware or
+another such change waits on something, it is a few milliseconds with a
+database, and the retry it concerns was sent while the first request was
+still being answered. If the second write fails, it is logged, and the
+response without the change stays stored for its retention and is what every
+retry gets.
 
 **What is not stored.** Nothing is stored and the key is released when the
 handler fails with one of its errors, dies, or answers `400` or above, and
