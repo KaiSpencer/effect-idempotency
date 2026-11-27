@@ -34,7 +34,7 @@ export interface Options {
   /** The largest body that is kept. */
   readonly maxBytes: number;
   /** Where the fiber that reads the stream runs. */
-  readonly fibers: FiberSet.FiberSet<unknown, unknown>;
+  readonly fibers: FiberSet.FiberSet;
   /** Gets the body once the stream has ended, if it is within `maxBytes`. */
   readonly onEnd: (body: Uint8Array) => Effect.Effect<void>;
   /** Runs when the stream fails, is stopped, or goes over `maxBytes`. */

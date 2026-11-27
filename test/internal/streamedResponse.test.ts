@@ -15,7 +15,7 @@ const start = Effect.fnUntraced(function* (
   stream: Stream.Stream<Uint8Array, unknown>,
   options?: {
     readonly maxBytes?: number;
-    readonly fibers?: FiberSet.FiberSet<unknown, unknown>;
+    readonly fibers?: FiberSet.FiberSet;
   },
 ) {
   const fibers = options?.fibers ?? (yield* FiberSet.make());

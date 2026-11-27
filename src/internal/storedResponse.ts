@@ -26,7 +26,8 @@ export const storable = (
       return { _tag: "Bytes", body: body.body };
     case "Stream":
       return { _tag: "Stream" };
-    default:
+    case "FormData":
+    case "Raw":
       return { _tag: "None" };
   }
 };
