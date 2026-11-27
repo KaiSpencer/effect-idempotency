@@ -15,20 +15,29 @@ library.
 :::code-group
 
 ```bash [bun]
-bun add effect-idempotency effect
+bun add effect-idempotency effect @effect/platform-bun
 ```
 
 ```bash [pnpm]
-pnpm add effect-idempotency effect
+pnpm add effect-idempotency effect @effect/platform-bun
 ```
 
 ```bash [npm]
-npm install effect-idempotency effect
+npm install effect-idempotency effect @effect/platform-bun
 ```
 
 :::
 
-`effect` 4.1 or later is a peer dependency.
+`effect` 4.1 or later is a peer dependency. `@effect/platform-bun` is only
+for the server of this guide, which runs on Bun: on another runtime, install
+Effect's package for it instead.
+
+:::warning[Not in a published version yet]
+Version 0.0.1 exports `IdempotencyKey` alone. The middleware and the stores
+this guide uses are merged and will be in the next release. Until then the
+guide runs against the
+[repository](https://github.com/KaiSpencer/effect-idempotency) only.
+:::
 
 ### Declare the middleware in the API
 

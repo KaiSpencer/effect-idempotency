@@ -43,13 +43,16 @@ therefore not repeated: see [Limits](/behaviour/limits).
 
 ## How long each state lasts
 
-| State                        | Lasts                          | Option       | Default   |
-| ---------------------------- | ------------------------------ | ------------ | --------- |
-| The first request is running | Until the handler finishes     | `lockExpiry` | 5 minutes |
-| The response is stored       | From when the handler finished | `retention`  | 24 hours  |
+| State                           | Lasts                                                    | Option       | Default   |
+| ------------------------------- | -------------------------------------------------------- | ------------ | --------- |
+| The first request holds the key | Until its handler finishes, and for `lockExpiry` at most | `lockExpiry` | 5 minutes |
+| The response is stored          | For `retention`, from when the handler finished          | `retention`  | 24 hours  |
 
-After `retention` the key is new again. `lockExpiry` only matters when a
-process dies mid-request: see
+After `retention` the key is new again.
+
+After `lockExpiry` another request may take the key, whether the process that
+held it died or its handler is only slow. Set it longer than the slowest
+handler, or a retry runs the handler a second time alongside the first: see
 [Disconnects and failures](/behaviour/failures#a-process-that-dies).
 
 ```ts twoslash

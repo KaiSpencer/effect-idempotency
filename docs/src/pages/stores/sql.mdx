@@ -106,7 +106,12 @@ another schema. The layer fails to build on any other name.
 ### Claiming a key
 
 Claiming a key is one statement, an insert that takes over the row if it has
-expired. It needs no transaction, and two servers cannot both get a key.
+expired. It needs no transaction, and of two servers that ask for a free key
+at the same moment only one gets it.
+
+That holds while the claim's lock has not expired. After `lockExpiry` another
+request can take the key, even if the first is still running: see
+[A process that dies](/behaviour/failures#a-process-that-dies).
 
 A request that does not get the key, because it is answered `409`, `422` or
 with the stored response, rewrites the row unchanged to read it.

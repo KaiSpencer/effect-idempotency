@@ -1,6 +1,6 @@
 # Idempotency [The server middleware: declare it with Service, provide it with layer]
 
-```ts
+```ts twoslash
 import { Idempotency } from "effect-idempotency";
 ```
 
@@ -104,8 +104,9 @@ The options of [`layer`](#layer).
   with accounts. See [Scope](/behaviour/scope).
 - **`retention`**: counted from when the handler finished. After it the key is
   new. See [What is stored](/behaviour/stored-responses).
-- **`lockExpiry`**: it matters when a process dies mid-request. Make it longer
-  than the slowest handler. See
+- **`lockExpiry`**: it frees the key of a process that died mid-request. It
+  counts for a request that is still running too, so make it longer than the
+  slowest handler. See
   [Disconnects and failures](/behaviour/failures#a-process-that-dies).
 
 A `Duration.Input` is, for example, a `Duration`, a number of milliseconds, or

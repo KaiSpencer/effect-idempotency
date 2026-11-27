@@ -28,9 +28,12 @@ A request holds its key for `lockExpiry`, 5 minutes by default. If the process
 dies mid-request, another request can take the key after that and run the
 handler again.
 
-Set `lockExpiry` longer than the slowest handler. A handler that outlives it
-still stores its response, but a retry that arrives in the meantime takes the
-key and runs alongside it.
+The lock expires for a request that is only slow as well, so set `lockExpiry`
+longer than the slowest handler. A handler that outlives it still stores its
+response if nobody has taken the key. A retry that arrives in the meantime
+takes the key and runs the handler alongside it: the first request still sends
+its response, but its claim is void, and the response that is stored is the
+retry's.
 
 ```ts twoslash
 // @filename: Api.ts
