@@ -1,11 +1,20 @@
 /**
- * A small payments API for the tests: one endpoint behind an authentication
+ * A small payments API for the tests: endpoints behind an authentication
  * middleware and an idempotency middleware, and a control group that lets a
  * test hold a charge open and count how many ran, over HTTP as well as in
  * process.
+ *
+ * Besides the plain JSON endpoint there is one for each kind of body the
+ * middleware treats differently: a streamed response, payloads that are a
+ * stream or multipart, and an upload whose body is left out of the
+ * fingerprint.
  */
 import { Context, Effect, Latch, Layer, Schema, Stream } from "effect";
-import { HttpServerRequest, HttpServerResponse } from "effect/http";
+import {
+  HttpServerRequest,
+  HttpServerResponse,
+  type Multipart,
+} from "effect/http";
 import {
   HttpApi,
   HttpApiBuilder,
@@ -66,10 +75,41 @@ const PaymentsGroup = HttpApiGroup.make("payments")
       success: Payment,
       error: Declined,
     }),
+    // Streams its response, and charges part way through it.
     HttpApiEndpoint.post("receipt", "/payments/receipt", {
       headers,
+      payload: Schema.Struct({ amount: Schema.Number }),
       success: Schema.String.pipe(HttpApiSchema.asText()),
+      error: Declined,
     }),
+    // A stream of amounts, charged as one payment.
+    HttpApiEndpoint.post("batch", "/payments/batch", {
+      headers,
+      payload: HttpApiSchema.StreamNdjson({
+        schema: Schema.Struct({ amount: Schema.Number }),
+      }),
+      success: Payment,
+    }),
+    // A multipart form, read whole and with its files saved to disk.
+    HttpApiEndpoint.post("invoice", "/payments/invoice", {
+      headers,
+      payload: Schema.Struct({ amount: Schema.NumberFromString }).pipe(
+        HttpApiSchema.asMultipart(),
+      ),
+      success: Payment,
+    }),
+    // A multipart form, read part by part.
+    HttpApiEndpoint.post("invoiceParts", "/payments/invoice-parts", {
+      headers,
+      payload: Schema.Unknown.pipe(HttpApiSchema.asMultipartStream()),
+      success: Payment,
+    }),
+    // A body the fingerprint leaves out: it is charged its length in bytes.
+    HttpApiEndpoint.post("upload", "/payments/upload", {
+      headers,
+      payload: HttpApiSchema.StreamUint8Array(),
+      success: Payment,
+    }).annotate(Idempotency.FingerprintBody, false),
     HttpApiEndpoint.post("checkout", "/payments/checkout", {
       headers,
       success: Payment,
@@ -158,13 +198,63 @@ const PaymentsHandlers = HttpApiBuilder.group(
             HttpApiBuilder.securitySetCookie(lastPayment, payment.id),
           ),
         )
-        .handle("receipt", () =>
-          Effect.map(Effect.orDie(ledger.charge(1)), (payment) =>
+        // The first chunk is sent before the charge starts, so a test that
+        // holds charges holds the response part way through.
+        .handle("receipt", ({ payload }) =>
+          Effect.succeed(
             HttpServerResponse.stream(
-              Stream.encodeText(Stream.make("receipt for ", payment.id)),
-              {
-                contentType: "text/plain",
-              },
+              Stream.encodeText(
+                Stream.concat(
+                  Stream.make("receipt for "),
+                  Stream.fromEffect(
+                    Effect.map(ledger.charge(payload.amount), (p) => p.id),
+                  ),
+                ),
+              ),
+              { contentType: "text/plain" },
+            ),
+          ),
+        )
+        .handle("batch", ({ payload }) =>
+          Effect.orDie(
+            Effect.flatMap(
+              Stream.runFold(
+                payload,
+                () => 0,
+                (sum, line) => sum + line.amount,
+              ),
+              ledger.charge,
+            ),
+          ),
+        )
+        .handle("invoice", ({ payload }) =>
+          Effect.orDie(ledger.charge(payload.amount)),
+        )
+        .handle("invoiceParts", ({ payload }) =>
+          Effect.orDie(
+            Effect.flatMap(
+              Stream.runFold(
+                Stream.filter(
+                  payload,
+                  (part): part is Multipart.Field =>
+                    part._tag === "Field" && part.key === "amount",
+                ),
+                () => 0,
+                (sum, field) => sum + Number(field.value),
+              ),
+              ledger.charge,
+            ),
+          ),
+        )
+        .handle("upload", ({ payload }) =>
+          Effect.orDie(
+            Effect.flatMap(
+              Stream.runFold(
+                payload,
+                () => 0,
+                (size, chunk) => size + chunk.length,
+              ),
+              ledger.charge,
             ),
           ),
         )
@@ -209,7 +299,10 @@ const AuthenticationLive = Layer.succeed(Authentication, (httpEffect) =>
  * so a test can read it. The store comes from the caller.
  */
 export const layerWith = (
-  options?: Pick<Idempotency.Options<CurrentUser>, "retention" | "lockExpiry">,
+  options?: Pick<
+    Idempotency.Options<CurrentUser>,
+    "retention" | "lockExpiry" | "maxStoredBytes"
+  >,
 ) =>
   Layer.mergeAll(PaymentsHandlers, ControlHandlers).pipe(
     Layer.provideMerge(
@@ -224,5 +317,5 @@ export const layerWith = (
     Layer.provideMerge(Ledger.layer),
   );
 
-/** {@link layerWith} the default retention and lock expiry. */
+/** {@link layerWith} the default options. */
 export const layer = layerWith();

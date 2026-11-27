@@ -13,10 +13,18 @@ after.
 Without this, the disconnect would stop the handler part way and the retry
 would run its side effect a second time.
 
+The same holds for a streamed response: a client that leaves part way does not
+stop the stream. The middleware reads it to the end and stores it for the
+retry. See [Streams and uploads](/behaviour/streams#streamed-responses).
+
 ## A server that shuts down
 
 The same holds at shutdown: the server cannot interrupt the request, and one
 that waits for requests in flight waits for these until their handlers finish.
+
+A streamed response that the middleware is still reading when its layer is
+released is interrupted, and its key released, so a retry runs the handler
+again.
 
 :::tip
 Give a handler that can hang its own `Effect.timeout`, which still works.

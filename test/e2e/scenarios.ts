@@ -14,6 +14,7 @@ import { HttpClient, HttpClientRequest } from "effect/http";
 import { HttpApiClient } from "effect/http-api";
 import * as Payments from "../fixtures/Payments.ts";
 import { describe, expect, it } from "../support/EffectTest.ts";
+import { bodyScenarios } from "./bodyScenarios.ts";
 
 const problemJson = "application/problem+json";
 const problemType = (name: string) =>
@@ -44,11 +45,6 @@ export const create = (
     HttpClient.execute,
   );
 };
-
-const receipt = HttpClientRequest.post("/payments/receipt").pipe(
-  HttpClientRequest.setHeaders({ "x-user": "alice", "idempotency-key": "k1" }),
-  HttpClient.execute,
-);
 
 const checkout = HttpClientRequest.post("/payments/checkout").pipe(
   HttpClientRequest.setHeaders({ "x-user": "alice", "idempotency-key": "k1" }),
@@ -381,12 +377,6 @@ export const idempotencyScenarios = (
         expect(yield* charges).toBe(1);
       }));
 
-    test("sends a streamed response without storing it", () =>
-      Effect.gen(function* () {
-        expect(yield* (yield* receipt).text).toBe("receipt for pay_1");
-        const retry = yield* receipt;
-        expect(retry.headers["idempotent-replayed"]).toBeUndefined();
-        expect(yield* retry.text).toBe("receipt for pay_2");
-      }));
+    bodyScenarios(test, { charges, chargesReach, hold, resume });
   });
 };

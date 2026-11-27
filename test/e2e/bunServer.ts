@@ -2,6 +2,7 @@
  * Serves the fixture API with `Bun.serve`, through
  * `HttpRouter.toWebHandler`, on a store of the caller's choosing.
  */
+import { BunFileSystem } from "@effect/platform-bun";
 import { Effect, Layer } from "effect";
 import {
   FetchHttpClient,
@@ -17,14 +18,18 @@ import * as Payments from "../fixtures/Payments.ts";
 /**
  * Serves the API on a free port and provides a client pointed at it. Each
  * build is a server of its own, with a ledger and a build of `store` of its
- * own, and stops when its scope closes.
+ * own, and stops when its scope closes. `options` are the middleware's.
+ *
+ * The file system is a real one, where a multipart upload saves its files.
  */
 export const serve = (
   store: Layer.Layer<IdempotencyStore.IdempotencyStore>,
+  options?: Parameters<typeof Payments.layerWith>[0],
 ): Layer.Layer<HttpClient.HttpClient> => {
   const Routes = HttpApiBuilder.layer(Payments.Api).pipe(
-    Layer.provide(Payments.layer),
+    Layer.provide(Payments.layerWith(options)),
     Layer.provide(store),
+    Layer.provide(BunFileSystem.layer),
     Layer.provide(HttpServer.layerServices),
   );
   return Layer.effect(

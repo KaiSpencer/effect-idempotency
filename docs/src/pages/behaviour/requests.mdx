@@ -28,6 +28,11 @@ bytes are the same. The body is compared byte for byte: the same JSON with
 different whitespace is a different request. A retry sends the bytes it sent
 before, so this only rejects a client that reuses a key.
 
+To compare the body, the middleware reads it whole before the handler runs, a
+streamed or multipart payload included. An endpoint can leave the body out
+instead, so that it streams to the handler: see
+[Streams and uploads](/behaviour/streams#leaving-the-body-out-of-the-fingerprint).
+
 A key that arrives with a different request is answered `422`, whether the
 first request is still running or has finished.
 
@@ -43,10 +48,10 @@ therefore not repeated: see [Limits](/behaviour/limits).
 
 ## How long each state lasts
 
-| State                           | Lasts                                                    | Option       | Default   |
-| ------------------------------- | -------------------------------------------------------- | ------------ | --------- |
-| The first request holds the key | Until its handler finishes, and for `lockExpiry` at most | `lockExpiry` | 5 minutes |
-| The response is stored          | For `retention`, from when the handler finished          | `retention`  | 24 hours  |
+| State                           | Lasts                                                                                | Option       | Default   |
+| ------------------------------- | ------------------------------------------------------------------------------------ | ------------ | --------- |
+| The first request holds the key | Until its handler finishes, and its streamed response ends, for `lockExpiry` at most | `lockExpiry` | 5 minutes |
+| The response is stored          | For `retention`, from when the handler finished, or its streamed response ended      | `retention`  | 24 hours  |
 
 After `retention` the key is new again.
 

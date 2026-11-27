@@ -5,6 +5,9 @@
 - The server middleware, `Idempotency.Service` and `Idempotency.layer`.
 - A store in memory, `IdempotencyStore.layerMemory`.
 - A store in PostgreSQL or SQLite, `IdempotencyStore.layerSql`.
+- Streamed responses, stream and multipart payloads, a size limit for stored
+  responses, and `Idempotency.FingerprintBody` to leave a body out of the
+  fingerprint. See [Streams and uploads](/behaviour/streams).
 
 The package is in development, on `0.x`: a breaking change is a minor version.
 Releases are listed in the
@@ -16,8 +19,8 @@ Releases are listed in the
    the same contract tests as the stores there are.
 2. **Client middleware.** The generated client creates one key per call and
    keeps it across `Effect.retry`. A `409` is treated as retriable.
-3. **Per-endpoint options.** An optional key, and the request fields that make
-   up the fingerprint.
+3. **Per-endpoint options.** An optional key, the request fields that make up
+   the fingerprint, and a size limit per endpoint.
 4. **Transactional mode.** The key's completion is written in the same
    `SqlClient` transaction as the handler's own writes, so a crash cannot
    leave the side effect done and the key unrecorded.

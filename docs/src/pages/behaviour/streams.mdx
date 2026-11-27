@@ -1,0 +1,168 @@
+# Streams and uploads [Streamed responses, stream and multipart payloads, and the size limit]
+
+Most endpoints take a JSON body and answer with one, and the middleware keeps
+both in memory. This page covers the bodies that are not: a response that is a
+stream, a request payload that is a stream or a multipart upload, and how
+large a stored response may be.
+
+| Body                                 | What the middleware does                                                                                  |
+| ------------------------------------ | --------------------------------------------------------------------------------------------------------- |
+| A streamed response                  | Sends it as it is read, and stores it once it has ended.                                                  |
+| A response over `maxStoredBytes`     | Sends it whole, does not store it, and releases the key.                                                  |
+| A file or form data response         | Sends it, does not store it, and releases the key.                                                        |
+| A `Stream` or multipart payload      | Reads it whole before the handler, as part of the fingerprint. The handler reads it from memory.          |
+| A payload the fingerprint leaves out | Leaves it for the handler to read as it arrives. Only the digest headers stand for it in the fingerprint. |
+
+## Streamed responses
+
+A response whose body is a stream, such as `HttpServerResponse.stream` or an
+endpoint whose success is `HttpApiSchema.StreamNdjson`, is stored like any
+other once the stream has ended.
+
+- **While the stream runs**, the client receives it chunk by chunk, at its own
+  pace, and the middleware keeps a copy. The first request still holds the
+  key, so a retry is answered `409`
+  [`IdempotencyKeyInProgress`](/errors#idempotency-key-in-progress).
+- **When the stream ends**, the copy is stored, with the status, headers and
+  cookies the client received, and every retry gets it.
+- **When the client leaves part way**, the middleware reads the rest of the
+  stream itself, so the work the stream does is finished and the response is
+  stored for the retry, as it is for a client that leaves before a response in
+  memory. It stops early only when keeping the response is no longer possible:
+  see [A stream nobody reads](#a-stream-nobody-reads).
+- **When the stream fails**, the key is released and a retry runs the handler
+  again. The client's connection is cut, before the status if it has not been
+  sent, or part way through the body.
+
+A replay sends the stored bytes as one body, with a `Content-Length`. A
+client reading a replayed NDJSON or server-sent event stream receives every
+element at once, including any keep-alive comments the first one carried.
+
+:::warning[A streamed response holds the key until it ends]
+Set `lockExpiry` longer than the slowest stream, as for the slowest handler.
+A retry that arrives after it takes the key and runs the handler again: see
+[Disconnects and failures](/behaviour/failures#a-process-that-dies).
+:::
+
+### A stream nobody reads
+
+Once the client has gone, nobody receives the stream. The middleware reads on
+so that it can store the response, but it stops, and releases the key, when:
+
+- the stream goes over `maxStoredBytes`, since it could not be stored, or
+- `lockExpiry` has passed since the request claimed its key, since another
+  request may hold the key by then.
+
+So a stream that never ends, such as a feed of events, is not read for ever
+after its client has gone. While the client is still connected, a stream runs
+as long as it runs.
+
+When the server shuts down, the streams the middleware is still reading are
+interrupted and their keys released.
+
+## The size limit
+
+`maxStoredBytes` is the largest response body the middleware stores, 1 MiB by
+default. It applies to every response, in memory or streamed.
+
+```ts twoslash
+// @filename: Api.ts
+// [!include ~/snippets/Api.ts]
+
+// @filename: Server.ts
+import { Effect } from "effect";
+import { Idempotency } from "effect-idempotency";
+import { CurrentUser, PaymentIdempotency } from "./Api.ts";
+// ---cut---
+const PaymentIdempotencyLive = Idempotency.layer(PaymentIdempotency, {
+  scope: Effect.map(CurrentUser, (user) => user.id),
+  maxStoredBytes: "10 MiB",
+});
+```
+
+A response over the limit is still sent whole, but it is not stored and its
+key is released, so a retry runs the handler again. A streamed one is released
+when it ends. The limit bounds what one key takes in the store, and the memory
+the copy of a streamed response takes while it is read.
+
+:::warning[A response over the limit is not protected]
+A retry of a request whose response was over the limit runs its side effect
+again. Raise the limit for an endpoint whose responses can be large, or return
+something small, such as the id of a stored result, and serve the large body
+from another endpoint.
+:::
+
+## Streamed and multipart payloads
+
+To tell a retry from a reused key, the middleware compares the body: see
+[The same request](/behaviour/requests#the-same-request). So by default it
+reads the whole body before the handler runs, and the handler reads that copy
+from memory. This holds for every payload:
+
+- JSON, text, form and `Uint8Array` payloads,
+- `HttpApiSchema.StreamUint8Array` and `HttpApiSchema.StreamNdjson`,
+- multipart with `HttpApiSchema.asMultipart`, whose files are saved to disk as
+  usual, and with `HttpApiSchema.asMultipartStream`.
+
+A stream payload is therefore not streamed from the client: the handler starts
+once the whole body has arrived, and the body is in memory while the request
+runs. Put a bound on it with Effect's `HttpIncomingMessage.MaxBodySize`. A
+larger body is answered `413` before the key is claimed.
+
+```ts twoslash
+import { ByteSize, Layer } from "effect";
+import { HttpIncomingMessage } from "effect/http";
+// ---cut---
+// Provided with the API's handlers, next to the store.
+const MaxBodySizeLive = Layer.succeed(
+  HttpIncomingMessage.MaxBodySize,
+  ByteSize.mebibytes(10),
+);
+```
+
+:::warning[A multipart retry must send the same bytes]
+A client that encodes a form again for a retry, as `fetch` does with a
+`FormData` body, draws a new boundary, so the retry's bytes differ and it is
+answered `422`. Have the client keep the encoded body for its retries, or
+leave the body out of the fingerprint as below.
+:::
+
+## Leaving the body out of the fingerprint
+
+For an upload that should reach the handler as it arrives, annotate the
+endpoint with `Idempotency.FingerprintBody` set to `false`. The middleware then
+does not read the body, and the handler streams it from the client.
+
+```ts twoslash
+// @filename: Api.ts
+// [!include ~/snippets/Api.ts]
+
+// @filename: Upload.ts
+import { Schema } from "effect";
+import { HttpApiEndpoint, HttpApiSchema } from "effect/http-api";
+import { Idempotency, IdempotencyKey } from "effect-idempotency";
+import { PaymentIdempotency } from "./Api.ts";
+// ---cut---
+const upload = HttpApiEndpoint.post("upload", "/receipts", {
+  headers: Schema.Struct({ "idempotency-key": IdempotencyKey.FromHeader }),
+  payload: HttpApiSchema.StreamUint8Array(),
+  success: Schema.Struct({ id: Schema.String }),
+})
+  .middleware(PaymentIdempotency)
+  .annotate(Idempotency.FingerprintBody, false);
+```
+
+The annotation can be put on a group too, for all of its endpoints.
+
+Two requests to such an endpoint are the same when their method, path, query
+string, `Content-Digest` and `Repr-Digest` headers are. The digest headers are
+those of [RFC 9530](https://www.rfc-editor.org/rfc/rfc9530), which a client
+computes over the bytes it sends:
+
+- A client that sends a digest has a reused key with another body answered
+  `422`, as on any other endpoint.
+- A client that sends neither has a reused key with another body answered with
+  the first response. Use a new key for every upload.
+
+`Content-Type` and `Content-Length` are not compared, so a multipart retry
+with a new boundary is the same request.

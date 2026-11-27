@@ -1,12 +1,19 @@
 # Limits [What the middleware does not do]
 
-## Streams, files and multipart bodies
+## Large and streamed bodies
 
-A response whose body is not bytes in memory, such as a stream, a file or form
-data, is sent but not stored, so a retry runs the handler again.
+[Streams and uploads](/behaviour/streams) has the details. In short:
 
-A request whose payload is a stream or a multipart upload is not supported.
-See [issue #3](https://github.com/KaiSpencer/effect-idempotency/issues/3).
+- A response over `maxStoredBytes`, 1 MiB by default, is sent but not stored,
+  so a retry runs the handler again.
+- A response whose body is a file or form data is sent but not stored either.
+- A streamed response is stored once it has ended. Until then a retry is
+  answered `409`.
+- A request payload that is a stream or a multipart upload is read whole
+  before the handler runs, unless the endpoint leaves the body out of the
+  fingerprint with `Idempotency.FingerprintBody`.
+- A multipart retry whose form was encoded again, with a new boundary, is a
+  different request and is answered `422`.
 
 ## Checks inside the handler are not repeated
 
@@ -19,7 +26,9 @@ runs outside this one, as authentication does: see
 
 The same JSON with different whitespace or key order is a different request,
 and is answered `422`. A retry that resends the bytes it sent before is not
-affected.
+affected. An endpoint that leaves the body out of the fingerprint compares its
+digest headers instead: see
+[Streams and uploads](/behaviour/streams#leaving-the-body-out-of-the-fingerprint).
 
 ## One key header per request
 
