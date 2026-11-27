@@ -1,4 +1,4 @@
-import { Deferred, Effect, Exit, FiberSet, Queue, Stream } from "effect";
+import { Deferred, Effect, Exit, FiberSet, Queue, Scope, Stream } from "effect";
 import { HttpBody, HttpServerResponse } from "effect/http";
 
 /**
@@ -22,6 +22,11 @@ import { HttpBody, HttpServerResponse } from "effect/http";
  * A stream nobody reads is not read for ever: once the client has gone, the
  * fiber stops when the stream goes over `maxBytes`, since it cannot be stored,
  * or when `abandonAfter` ends, and `onDiscard` runs.
+ *
+ * What the stream reads from, such as a database cursor the handler opened,
+ * lives in `scope`. The server would close the request's scope when the
+ * client goes, so the stream gets a scope of its own, which the fiber closes
+ * once it has finished with the stream.
  */
 export interface Options {
   /** A response whose body is a stream. */
@@ -34,6 +39,11 @@ export interface Options {
   readonly onEnd: (body: Uint8Array) => Effect.Effect<void>;
   /** Runs when the stream fails, is stopped, or goes over `maxBytes`. */
   readonly onDiscard: Effect.Effect<void>;
+  /**
+   * The scope the stream's resources live in. It is closed after `onEnd` or
+   * `onDiscard`, with how the reading ended.
+   */
+  readonly scope: Scope.Closeable;
   /**
    * Starts when the client goes, and ends when reading on without it is no
    * longer worth it.
@@ -74,18 +84,22 @@ export const make = Effect.fnUntraced(function* (
   let chunks: Array<Uint8Array> | undefined = [];
   let size = 0;
   const read = Stream.runForEachArray(body.stream, (array) => {
+    // Chunks wait in the queue, so the stream could reuse a buffer before the
+    // client has read it. Each is copied once, and the client and the stored
+    // body share the copy. `new Uint8Array` copies a `Buffer` too, whose
+    // `slice` would not.
+    const copies = array.map((chunk) => new Uint8Array(chunk));
     if (chunks !== undefined) {
-      for (const chunk of array) {
+      for (const chunk of copies) {
         size += chunk.length;
-        // A copy: the stream could reuse the buffer it sent.
-        chunks.push(chunk.slice());
+        chunks.push(chunk);
       }
       if (size > options.maxBytes) {
         chunks = undefined;
         Deferred.doneUnsafe(overLimit, Exit.void);
       }
     }
-    return Queue.offerAll(queue, array);
+    return Queue.offerAll(queue, copies);
   });
 
   // Ends once nobody reads the response and keeping it is no longer possible
@@ -95,7 +109,7 @@ export const make = Effect.fnUntraced(function* (
     Effect.raceFirst(Deferred.await(overLimit), options.abandonAfter),
   );
 
-  const finish = (exit: Exit.Exit<boolean, unknown>) => {
+  const settle = (exit: Exit.Exit<boolean, unknown>) => {
     if (Exit.isFailure(exit))
       return Effect.andThen(
         Queue.failCause(queue, exit.cause),
@@ -111,6 +125,19 @@ export const make = Effect.fnUntraced(function* (
         : options.onEnd(concat(kept, size)),
     );
   };
+  const finish = (exit: Exit.Exit<boolean, unknown>) =>
+    Effect.andThen(
+      settle(exit),
+      Scope.close(
+        options.scope,
+        Exit.isFailure(exit)
+          ? exit
+          : exit.value
+            ? Exit.void
+            : // The stream was stopped part way.
+              Exit.interrupt(),
+      ),
+    );
 
   yield* FiberSet.run(
     options.fibers,

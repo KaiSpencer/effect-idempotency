@@ -34,6 +34,10 @@ other once the stream has ended.
   again. The client's connection is cut, before the status if it has not been
   sent, or part way through the body.
 
+What the handler opens in its scope for the stream to read from, such as a
+database cursor, stays open until the middleware has finished reading the
+stream, even after the client has gone, and is closed then.
+
 A replay sends the stored bytes as one body, with a `Content-Length`. A
 client reading a replayed NDJSON or server-sent event stream receives every
 element at once, including any keep-alive comments the first one carried.
@@ -165,4 +169,8 @@ computes over the bytes it sends:
   the first response. Use a new key for every upload.
 
 `Content-Type` and `Content-Length` are not compared, so a multipart retry
-with a new boundary is the same request.
+with a new boundary is the same request, as long as it carries no digest. A
+digest covers the encoded bytes, boundary included, so a client that encodes
+the form again and computes its digest again sends another digest, and is
+answered `422`. A client that sends a digest must keep the encoded body, and
+its digest, for its retries.

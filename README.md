@@ -62,8 +62,11 @@ the whole program: the API, the server and a client that retries.
 
 - **Streamed responses** are sent as they are read and stored once the stream
   has ended. A retry gets `409` until then. If the client leaves part way, the
-  middleware reads the stream to the end and stores it for the retry. If the
-  stream fails, the key is released.
+  middleware reads the stream to the end and stores it for the retry, unless
+  the stream goes over `maxStoredBytes` or outlasts `lockExpiry`: then it
+  stops reading and releases the key. If the stream fails, the key is
+  released. In each of these cases a retry runs the handler again, and its
+  side effects with it.
 - **Stream and multipart payloads** are read whole before the handler runs,
   so that the body is part of what makes two requests the same, and the
   handler reads them from memory. Annotate an endpoint with

@@ -36,7 +36,10 @@ Nothing is stored and the key is released when:
   has an unsupported content type is,
 - the response body is over `maxStoredBytes`, 1 MiB by default,
 - the response body is a file or form data,
-- the response body is a stream, and the stream fails.
+- the response body is a stream, and the stream fails,
+- the response body is a stream whose client has gone, and the middleware
+  gives it up: see
+  [A stream nobody reads](/behaviour/streams#a-stream-nobody-reads).
 
 The next request with the key runs the handler again.
 

@@ -29,6 +29,7 @@ import {
   Exit,
   FiberSet,
   Layer,
+  Scope,
   Semaphore,
 } from "effect";
 import { Digest } from "effect/crypto";
@@ -324,7 +325,24 @@ export const layer = <Id, Requires>(
                 }),
               );
 
-              const exit = yield* Effect.exit(handler);
+              // What the handler opens for its response, such as a database
+              // cursor its stream reads from, lives in a scope of its own.
+              // Usually it closes with the request's. The server closes that
+              // one when a client leaves a streamed response, though, and the
+              // middleware reads on, so the scope of a streamed response
+              // passes to the fiber that reads it, which closes it at the end.
+              const requestScope = yield* Scope.Scope;
+              const handlerScope = yield* Scope.make();
+              const handlerScopeOwner = { stream: false };
+              yield* Scope.addFinalizerExit(requestScope, (exit) =>
+                handlerScopeOwner.stream
+                  ? Effect.void
+                  : Scope.close(handlerScope, exit),
+              );
+
+              const exit = yield* Effect.exit(
+                Effect.provideService(handler, Scope.Scope, handlerScope),
+              );
               if (Exit.isFailure(exit)) {
                 yield* release;
                 return yield* Effect.failCause(exit.cause);
@@ -388,6 +406,7 @@ export const layer = <Id, Requires>(
               // go wrong: from now on a retry is answered with it and the
               // handler does not run again. A streamed one is stored by the
               // fiber that reads it, when it ends.
+              handlerScopeOwner.stream = kind._tag === "Stream";
               const streamed =
                 kind._tag === "Stream"
                   ? yield* StreamedResponse.make({
@@ -399,6 +418,7 @@ export const layer = <Id, Requires>(
                         return write;
                       },
                       onDiscard: release,
+                      scope: handlerScope,
                       // Past the lock expiry another request may hold the key,
                       // so a stream nobody reads is not read for longer.
                       abandonAfter: Effect.flatMap(

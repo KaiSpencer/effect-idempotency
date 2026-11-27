@@ -1,5 +1,9 @@
 import { Effect, Stream } from "effect";
-import { type HttpServerRequest, Multipart } from "effect/http";
+import {
+  HttpClientRequest,
+  type HttpServerRequest,
+  Multipart,
+} from "effect/http";
 
 /**
  * The request the handler sees once the middleware has read the body to
@@ -15,8 +19,23 @@ import { type HttpServerRequest, Multipart } from "effect/http";
  *
  * It is a `Proxy` and not a class: everything else, including what a platform
  * adds of its own, such as Bun's `source`, is the original request's.
+ *
+ * A request made in memory from a client request, as `HttpApiTest` and
+ * `HttpServerRequest.fromClientRequest` make, reads its body again each time,
+ * unless the body is a stream, and is returned as it is. Its form data in
+ * particular is parsed from the `FormData` itself: read as bytes, a form is
+ * encoded with a boundary its headers do not name.
  */
 export const make = (
+  request: HttpServerRequest.HttpServerRequest,
+  body: ArrayBuffer,
+): HttpServerRequest.HttpServerRequest =>
+  HttpClientRequest.isHttpClientRequest(request.source) &&
+  request.source.body._tag !== "Stream"
+    ? request
+    : replaying(request, body);
+
+const replaying = (
   request: HttpServerRequest.HttpServerRequest,
   body: ArrayBuffer,
 ): HttpServerRequest.HttpServerRequest => {

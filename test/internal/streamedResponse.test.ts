@@ -20,6 +20,12 @@ const start = Effect.fnUntraced(function* (
 ) {
   const fibers = options?.fibers ?? (yield* FiberSet.make());
   const outcome = yield* Deferred.make<string>();
+  // The scope the stream's resources live in, and how it was closed.
+  const scope = yield* Scope.make();
+  const closed = yield* Deferred.make<Exit.Exit<unknown, unknown>>();
+  yield* Scope.addFinalizerExit(scope, (exit) =>
+    Deferred.succeed(closed, exit),
+  );
   const streamed = yield* StreamedResponse.make({
     response: HttpServerResponse.stream(stream, {
       status: 201,
@@ -31,6 +37,7 @@ const start = Effect.fnUntraced(function* (
     onEnd: (body) => Deferred.succeed(outcome, decoder.decode(body)),
     onDiscard: Effect.asVoid(Deferred.succeed(outcome, "discarded")),
     abandonAfter: Effect.sleep("1 minute"),
+    scope,
   });
   const body = streamed.response.body;
   if (body._tag !== "Stream") throw new Error("The body is not a stream");
@@ -41,6 +48,9 @@ const start = Effect.fnUntraced(function* (
     detach: streamed.detach,
     outcome: Deferred.await(outcome),
     isDone: Deferred.isDone(outcome),
+    /** How the stream's scope was closed, once it is. */
+    closed: Deferred.await(closed),
+    isClosed: Deferred.isDone(closed),
   };
 });
 
@@ -78,15 +88,60 @@ describe("StreamedResponse", () => {
     }),
   );
 
-  it.effect("keeps its own copy of each chunk", () =>
+  it.effect("copies each chunk, so a stream can reuse its buffer", () =>
     Effect.gen(function* () {
-      const chunk = encoder.encode("first");
-      const streamed = yield* start(Stream.make(chunk));
-      yield* Stream.runForEach(streamed.body, (received) =>
-        Effect.sync(() => received.fill(0)),
+      // A `Buffer`, whose `slice` shares its memory.
+      const buffer = Buffer.from("a");
+      const streamed = yield* start(
+        Stream.concat(
+          Stream.succeed(buffer),
+          Stream.fromEffect(
+            Effect.sync(() => {
+              buffer.write("b");
+              return buffer;
+            }),
+          ),
+        ),
       );
-      expect(yield* streamed.outcome).toBe("first");
+      // Both chunks are queued before the client reads the first.
+      yield* settle;
+      expect(yield* read(streamed.body)).toBe("ab");
+      expect(yield* streamed.outcome).toBe("ab");
     }),
+  );
+
+  it.effect(
+    "keeps the stream's scope open after the client goes, until the stream ends",
+    () =>
+      Effect.gen(function* () {
+        const gate = yield* Deferred.make<void>();
+        const streamed = yield* start(
+          Stream.concat(
+            text("a"),
+            Stream.fromEffect(
+              Effect.as(Deferred.await(gate), encoder.encode("b")),
+            ),
+          ),
+        );
+        expect(yield* read(Stream.take(streamed.body, 1))).toBe("a");
+        yield* settle;
+        expect(yield* streamed.isClosed).toBe(false);
+
+        yield* Deferred.succeed(gate, undefined);
+        expect(yield* streamed.outcome).toBe("ab");
+        expect(yield* streamed.closed).toEqual(Exit.void);
+      }),
+  );
+
+  it.effect(
+    "closes the stream's scope with the failure of a stream that fails",
+    () =>
+      Effect.gen(function* () {
+        const streamed = yield* start(Stream.fail("the ledger is down"));
+        yield* streamed.detach;
+        expect(yield* streamed.outcome).toBe("discarded");
+        expect(yield* streamed.closed).toEqual(Exit.fail("the ledger is down"));
+      }),
   );
 
   it.effect("waits for the client while it reads", () =>
@@ -172,6 +227,7 @@ describe("StreamedResponse", () => {
       expect(yield* streamed.isDone).toBe(false);
       yield* TestClock.adjust("1 second");
       expect(yield* streamed.outcome).toBe("discarded");
+      expect(Exit.hasInterrupts(yield* streamed.closed)).toBe(true);
     }),
   );
 

@@ -17,6 +17,14 @@ The same holds for a streamed response: a client that leaves part way does not
 stop the stream. The middleware reads it to the end and stores it for the
 retry. See [Streams and uploads](/behaviour/streams#streamed-responses).
 
+:::warning[A stream nobody reads can be given up]
+Once its client has gone, the middleware stops reading a stream that goes over
+`maxStoredBytes`, or that is still running when `lockExpiry` has passed since
+the claim. It cannot store that response, so it releases the key, and a retry
+runs the handler again, side effects included. See
+[A stream nobody reads](/behaviour/streams#a-stream-nobody-reads).
+:::
+
 ## A server that shuts down
 
 The same holds at shutdown: the server cannot interrupt the request, and one

@@ -199,20 +199,34 @@ const PaymentsHandlers = HttpApiBuilder.group(
           ),
         )
         // The first chunk is sent before the charge starts, so a test that
-        // holds charges holds the response part way through.
+        // holds charges holds the response part way through. The stream
+        // reads from a resource the handler opens in its scope, as it would
+        // from a database cursor, and dies if that is closed under it.
         .handle("receipt", ({ payload }) =>
-          Effect.succeed(
-            HttpServerResponse.stream(
-              Stream.encodeText(
-                Stream.concat(
-                  Stream.make("receipt for "),
-                  Stream.fromEffect(
-                    Effect.map(ledger.charge(payload.amount), (p) => p.id),
+          Effect.map(
+            Effect.acquireRelease(
+              Effect.sync(() => ({ open: true })),
+              (printer) =>
+                Effect.sync(() => {
+                  printer.open = false;
+                }),
+            ),
+            (printer) =>
+              HttpServerResponse.stream(
+                Stream.encodeText(
+                  Stream.concat(
+                    Stream.make("receipt for "),
+                    Stream.fromEffect(
+                      Effect.flatMap(ledger.charge(payload.amount), (p) =>
+                        printer.open
+                          ? Effect.succeed(p.id)
+                          : Effect.die(new Error("The printer was closed")),
+                      ),
+                    ),
                   ),
                 ),
+                { contentType: "text/plain" },
               ),
-              { contentType: "text/plain" },
-            ),
           ),
         )
         .handle("batch", ({ payload }) =>

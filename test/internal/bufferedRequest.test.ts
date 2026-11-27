@@ -1,5 +1,5 @@
 import { Effect, Stream } from "effect";
-import { HttpServerRequest } from "effect/http";
+import { HttpClientRequest, HttpServerRequest } from "effect/http";
 import * as BufferedRequest from "../../src/internal/bufferedRequest.ts";
 import { describe, expect, it } from "../support/EffectTest.ts";
 
@@ -110,6 +110,47 @@ describe("BufferedRequest", () => {
       expect(request.originalUrl).toBe(original.originalUrl);
       expect(request.headers["x-user"]).toBe("alice");
       expect(request.source).toBe(original.source);
+    }),
+  );
+});
+
+describe("BufferedRequest of a request made from a client request", () => {
+  it.effect("parses a FormData body from the form, with its own boundary", () =>
+    Effect.gen(function* () {
+      const form = new FormData();
+      form.append("amount", "5");
+      const original = HttpServerRequest.fromClientRequest(
+        HttpClientRequest.post("http://localhost/payments").pipe(
+          HttpClientRequest.bodyFormData(form),
+        ),
+      );
+      // Read as bytes, the form is encoded with a boundary of its own.
+      const bytes = yield* Effect.orDie(original.arrayBuffer);
+      const request = BufferedRequest.make(original, bytes);
+
+      const parts = yield* Effect.orDie(
+        Stream.runCollect(request.multipartStream),
+      );
+      expect(parts.map((part) => `${part._tag}:${part.key}`)).toEqual([
+        "Field:amount",
+      ]);
+    }),
+  );
+
+  it.effect("replays a stream body, which can be read only once", () =>
+    Effect.gen(function* () {
+      const original = HttpServerRequest.fromClientRequest(
+        HttpClientRequest.post("http://localhost/payments").pipe(
+          HttpClientRequest.bodyStream(
+            Stream.make(new TextEncoder().encode("body")),
+          ),
+        ),
+      );
+      const bytes = yield* Effect.orDie(original.arrayBuffer);
+      const request = BufferedRequest.make(original, bytes);
+
+      expect(yield* text(request.stream)).toBe("body");
+      expect(yield* text(request.stream)).toBe("body");
     }),
   );
 });
