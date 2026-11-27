@@ -1,0 +1,33 @@
+# Roadmap [What is built, and what comes next]
+
+## Built
+
+- The server middleware, `Idempotency.Service` and `Idempotency.layer`.
+- A store in memory, `IdempotencyStore.layerMemory`.
+- A store in PostgreSQL or SQLite, `IdempotencyStore.layerSql`.
+
+The package is in development, on `0.x`: a breaking change is a minor version.
+Releases are listed in the
+[changelog](https://github.com/KaiSpencer/effect-idempotency/blob/main/CHANGELOG.md).
+
+## Planned
+
+1. **More stores.** A layer for Redis, and MySQL in the SQL store, checked by
+   the same contract tests as the stores there are.
+2. **Client middleware.** The generated client creates one key per call and
+   keeps it across `Effect.retry`. A `409` is treated as retriable.
+3. **Per-endpoint options.** An optional key, and the request fields that make
+   up the fingerprint.
+4. **Transactional mode.** The key's completion is written in the same
+   `SqlClient` transaction as the handler's own writes, so a crash cannot
+   leave the side effect done and the key unrecorded.
+
+## Later
+
+- A bridge to `effect/workflow`, so a long handler becomes a durable run a
+  retry rejoins.
+- The same store for `Rpc`.
+- A fetch-style wrapper for non-Effect servers.
+
+Requests and bug reports go to the
+[issue tracker](https://github.com/KaiSpencer/effect-idempotency/issues).

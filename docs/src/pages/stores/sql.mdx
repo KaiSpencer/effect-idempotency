@@ -1,0 +1,151 @@
+# SQL store [Keys in PostgreSQL or SQLite, through the SqlClient you already have]
+
+`IdempotencyStore.layerSql()` keeps the keys in a SQL database. Every server
+that shares the database shares the keys, and they survive a restart.
+
+## Requirements
+
+`layerSql` needs the `SqlClient` of a PostgreSQL or SQLite database, from any
+of Effect's clients for them.
+
+- On another database the layer fails to build.
+- SQLite must be 3.35 or later, the first with `RETURNING`. On an older one
+  the layer builds and every claim fails.
+- The layer creates its table and an index if they do not exist, so the
+  database user needs the right to create them.
+
+## Setup
+
+Provide the store to the middleware, and the database client to the store:
+
+:::code-group
+
+```ts twoslash [PostgreSQL]
+// @filename: Api.ts
+// [!include ~/snippets/Api.ts]
+
+// @filename: Server.ts
+import { Effect, Layer, Redacted } from "effect";
+import { Idempotency, IdempotencyStore } from "effect-idempotency";
+import { CurrentUser, PaymentIdempotency } from "./Api.ts";
+// ---cut---
+import { PgClient } from "@effect/sql-pg";
+
+const url = Redacted.make("postgres://localhost:5432/app");
+
+const PaymentIdempotencyLive = Idempotency.layer(PaymentIdempotency, {
+  scope: Effect.map(CurrentUser, (user) => user.id),
+}).pipe(
+  Layer.provide(IdempotencyStore.layerSql()),
+  Layer.provide(PgClient.layer({ url })),
+);
+```
+
+```ts twoslash [SQLite]
+// @filename: Api.ts
+// [!include ~/snippets/Api.ts]
+
+// @filename: Server.ts
+import { Effect, Layer } from "effect";
+import { Idempotency, IdempotencyStore } from "effect-idempotency";
+import { CurrentUser, PaymentIdempotency } from "./Api.ts";
+// ---cut---
+import { SqliteClient } from "@effect/sql-sqlite-bun";
+
+const PaymentIdempotencyLive = Idempotency.layer(PaymentIdempotency, {
+  scope: Effect.map(CurrentUser, (user) => user.id),
+}).pipe(
+  Layer.provide(IdempotencyStore.layerSql()),
+  Layer.provide(SqliteClient.layer({ filename: "app.db" })),
+);
+```
+
+:::
+
+An application that already provides a `SqlClient` gives the store the same
+one, and needs no second connection pool.
+
+## The table
+
+The layer creates one table and one index when it is built, if they do not
+exist.
+
+```sql
+CREATE TABLE effect_idempotency (
+  scope           TEXT   NOT NULL,
+  idempotency_key TEXT   NOT NULL,
+  fingerprint     TEXT   NOT NULL,
+  token           TEXT   NOT NULL, -- a new UUID for every claim
+  expires_at      BIGINT NOT NULL, -- milliseconds since the epoch
+  response        TEXT,            -- the response as JSON, null while the request runs
+  PRIMARY KEY (scope, idempotency_key)
+);
+CREATE INDEX effect_idempotency_expires_at_idx ON effect_idempotency (expires_at);
+```
+
+`expires_at` is when the lock expires while `response` is null, and when the
+retention ends after. The response is the JSON of
+`IdempotencyStore.StoredResponse`, its body in base64, so a stored body takes
+a third more room than it has bytes.
+
+### Another table name
+
+Pass `table` for another name than `effect_idempotency`:
+
+```ts twoslash
+import { IdempotencyStore } from "effect-idempotency";
+// ---cut---
+const StoreLive = IdempotencyStore.layerSql({ table: "payment_keys" });
+```
+
+The name is one name of at most 48 bytes, without a dot, so not a table in
+another schema. The layer fails to build on any other name.
+
+## How it works
+
+### Claiming a key
+
+Claiming a key is one statement, an insert that takes over the row if it has
+expired. It needs no transaction, and two servers cannot both get a key.
+
+A request that does not get the key, because it is answered `409`, `422` or
+with the stored response, rewrites the row unchanged to read it.
+
+### Old rows
+
+For as long as the layer is built it deletes, every five minutes and in
+batches of 1000, the responses whose retention is over.
+
+A claim that never finished, which is what a process that died leaves behind,
+is deleted once its lock has been expired for 24 hours. Until then the request
+that made it can still store its response, if nobody has taken the key.
+
+### Clocks
+
+Times come from the `Clock` of each server, not from the database. One server
+writes when a key expires and another may be the one to read it, so two
+servers whose clocks differ disagree by that much about when a lock has
+expired and when a retention is over: a response can be gone that much early.
+
+Keep the difference a small part of `lockExpiry` and of `retention`. The lock
+is counted from when the request asks for the key, so the time it waits for a
+database connection is taken from `lockExpiry` too.
+
+### Transactions
+
+The store uses the connection the request is on. A claim made inside a
+transaction is invisible to other requests until it commits, and gone if it
+rolls back.
+
+:::warning
+A middleware that wraps the request in a transaction must run inside the
+idempotency middleware, not around it.
+:::
+
+## Limits
+
+- MySQL and SQL Server are not supported.
+- On PostgreSQL a scope cannot hold a NUL character. The claim fails, the
+  request answers `500` and the handler does not run.
+- If the database is down, so is every endpoint that carries the middleware:
+  see [A store that fails](/behaviour/failures#a-store-that-fails).

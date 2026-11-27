@@ -1,0 +1,165 @@
+# Writing a store [Implement IdempotencyStore for another backend]
+
+A store implements three operations of the `IdempotencyStore` service: `claim`
+a key, `complete` a claim with a response, and `release` a claim.
+
+The comparing of requests and the choice of answer stay in the middleware, so
+a store holds no HTTP logic.
+
+## The service
+
+```ts twoslash
+import type { Duration, Effect } from "effect";
+import type { IdempotencyKey, IdempotencyStore } from "effect-idempotency";
+
+type Claim = IdempotencyStore.Claim;
+type ClaimResult = IdempotencyStore.ClaimResult;
+type Fingerprint = IdempotencyStore.Fingerprint;
+type StoredResponse = IdempotencyStore.StoredResponse;
+type IdempotencyStoreError = IdempotencyStore.IdempotencyStoreError;
+// ---cut---
+interface Store {
+  readonly claim: (options: {
+    readonly scope: string;
+    readonly key: IdempotencyKey.IdempotencyKey;
+    readonly fingerprint: Fingerprint;
+    readonly lockExpiry: Duration.Duration;
+  }) => Effect.Effect<ClaimResult, IdempotencyStoreError>;
+
+  readonly complete: (
+    claim: Claim,
+    response: StoredResponse,
+    retention: Duration.Duration,
+  ) => Effect.Effect<void, IdempotencyStoreError>;
+
+  readonly release: (
+    claim: Claim,
+  ) => Effect.Effect<void, IdempotencyStoreError>;
+}
+// ---cut-after---
+
+// The build fails if the interface above drifts from the service.
+type Service = IdempotencyStore.IdempotencyStore["Service"];
+export const fromService: Store = {} as Service;
+export const toService: Service = {} as Store;
+```
+
+A key is unique within its `scope`: the same key in two scopes is two keys. A
+store reads the time from Effect's `Clock`.
+
+## `claim`
+
+Claims the key if it is free.
+
+:::danger[`claim` must be atomic]
+Of any number of concurrent claims for a free key, exactly one gets `Claimed`.
+A store that reads and then writes in two steps lets two requests run the same
+handler.
+:::
+
+A claim holds the key for `lockExpiry`. After that the key can be claimed
+again, and the new claim voids the old one. Until then, and for as long as
+nobody claims the key again, the claim can still be completed or released.
+
+It answers one of three results:
+
+| `_tag`       | Meaning                                                      | Carries                   |
+| ------------ | ------------------------------------------------------------ | ------------------------- |
+| `Claimed`    | The key was free, or had expired. The caller now owns it.    | `claim`                   |
+| `InProgress` | Another request owns the key and has not finished.           | `fingerprint`             |
+| `Completed`  | A request finished with this key and its response is stored. | `fingerprint`, `response` |
+
+When the key is taken, the result carries the fingerprint the key was claimed
+with. The store only keeps the fingerprint and gives it back: the middleware
+compares it.
+
+A `Claim` is the right to finish one key. It holds the `scope`, the `key` and
+a `token`. Issue a new token with every claim, so a request whose claim
+expired cannot complete or release the claim of the request that took the key
+after it.
+
+## `complete`
+
+Stores the response for a claim and keeps it for `retention`, counted from
+now, after which the key is free again.
+
+- A claim can complete more than once, and the last response replaces the one
+  before. The middleware does so when the response
+  [changes before it is sent](/behaviour/stored-responses#changes-made-to-the-response-after-the-handler).
+- It does nothing if the claim is void, or if its response has been stored and
+  the retention of that response is over.
+
+## `release`
+
+Frees the key of a claim that has not completed. It does nothing if the claim
+is void or has completed.
+
+## Values a store handles
+
+The values a store handles are schemas, so a store outside the process can
+write them down.
+
+`IdempotencyStore.StoredResponse` encodes to JSON with `Schema.toCodecJson`,
+the body in base64:
+
+```ts twoslash
+import { Schema } from "effect";
+import { IdempotencyStore } from "effect-idempotency";
+
+const Response = Schema.fromJsonString(
+  Schema.toCodecJson(IdempotencyStore.StoredResponse),
+);
+
+const encode = Schema.encodeEffect(Response);
+//    ^?
+const decode = Schema.decodeUnknownEffect(Response);
+```
+
+The key and the fingerprint are branded strings, so a store cannot be handed a
+key the middleware has not checked.
+
+## Failures
+
+Fail with `IdempotencyStoreError` when the backend cannot be reached or cannot
+answer. [A store that fails](/behaviour/failures#a-store-that-fails) says what
+the middleware does with each failure.
+
+```ts twoslash
+import { Effect } from "effect";
+import { IdempotencyStore } from "effect-idempotency";
+
+declare const backend: { delete(key: string): Promise<void> };
+// ---cut---
+const remove = (key: string) =>
+  Effect.tryPromise({
+    try: () => backend.delete(key),
+    catch: (cause) => new IdempotencyStore.IdempotencyStoreError({ cause }),
+  });
+```
+
+## Providing it
+
+A store is a layer of the `IdempotencyStore.IdempotencyStore` service:
+
+```ts twoslash
+import { Layer } from "effect";
+import { IdempotencyStore } from "effect-idempotency";
+
+declare const store: IdempotencyStore.IdempotencyStore["Service"];
+// ---cut---
+const layerCustom = Layer.succeed(IdempotencyStore.IdempotencyStore, store);
+```
+
+## Reference implementations
+
+The two stores in the library are the best guide:
+
+- [`memoryStore.ts`](https://github.com/KaiSpencer/effect-idempotency/blob/main/src/internal/memoryStore.ts),
+  the whole contract in about a hundred lines.
+- [`sqlStore.ts`](https://github.com/KaiSpencer/effect-idempotency/blob/main/src/internal/sqlStore.ts),
+  a claim as one atomic statement.
+
+The repository checks every store with one contract test suite and a model
+check against the memory store. See
+[CONTRIBUTING.md](https://github.com/KaiSpencer/effect-idempotency/blob/main/CONTRIBUTING.md#tests)
+to run them against a new store.

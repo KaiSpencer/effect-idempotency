@@ -1,0 +1,39 @@
+# Choosing a store [Where idempotency keys and their stored responses live]
+
+The middleware keeps its keys in an `IdempotencyStore`. Provide one to
+`Idempotency.layer`.
+
+| Layer                          | Keeps the keys in                         | Shared between servers | Survives a restart |
+| ------------------------------ | ----------------------------------------- | ---------------------- | ------------------ |
+| `IdempotencyStore.layerMemory` | The process                               | No                     | No                 |
+| `IdempotencyStore.layerSql()`  | PostgreSQL or SQLite, through `SqlClient` | Yes                    | Yes                |
+
+## Which one
+
+- **[Memory](/stores/memory)** for tests, development, and a small server
+  that runs as one process.
+- **[SQL](/stores/sql)** for anything that runs as more than one process, or
+  must keep its keys across a restart. It uses the database the application
+  already has.
+- **[A store of your own](/stores/custom)** for anything else. A store
+  implements three operations and holds no HTTP logic.
+
+A Redis store and MySQL support are on the [roadmap](/roadmap).
+
+## Providing a store
+
+A store is a layer. Provide it to the middleware's layer:
+
+```ts twoslash
+// @filename: Api.ts
+// [!include ~/snippets/Api.ts]
+
+// @filename: Server.ts
+import { Effect, Layer } from "effect";
+import { Idempotency, IdempotencyStore } from "effect-idempotency";
+import { CurrentUser, PaymentIdempotency } from "./Api.ts";
+// ---cut---
+const PaymentIdempotencyLive = Idempotency.layer(PaymentIdempotency, {
+  scope: Effect.map(CurrentUser, (user) => user.id),
+}).pipe(Layer.provide(IdempotencyStore.layerMemory));
+```

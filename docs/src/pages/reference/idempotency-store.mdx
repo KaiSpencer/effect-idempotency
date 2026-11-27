@@ -1,0 +1,142 @@
+# IdempotencyStore [Where idempotency keys and their stored responses live]
+
+```ts
+import { IdempotencyStore } from "effect-idempotency";
+```
+
+| Export                                            | Kind      | What it is                                          |
+| ------------------------------------------------- | --------- | --------------------------------------------------- |
+| [`IdempotencyStore`](#idempotencystore)           | Service   | The store service.                                  |
+| [`layerMemory`](#layermemory)                     | Layer     | A store in the process's memory.                    |
+| [`layerSql`](#layersql)                           | Function  | A store in PostgreSQL or SQLite.                    |
+| [`SqlOptions`](#layersql)                         | Type      | The options of `layerSql`.                          |
+| [`StoredResponse`](#storedresponse)               | Schema    | A response as the store keeps it.                   |
+| [`Fingerprint`](#fingerprint)                     | Schema    | What makes two requests the same request.           |
+| [`Claim`](#claim)                                 | Interface | The right to finish one key.                        |
+| [`ClaimResult`](#claimresult)                     | Type      | What `claim` found.                                 |
+| [`IdempotencyStoreError`](#idempotencystoreerror) | Error     | The store could not be reached or could not answer. |
+
+## IdempotencyStore
+
+The store service. The middleware asks it for three things: claim a key,
+complete a claim with a response, and release a claim.
+
+| Operation  | Arguments                                 | Result                        |
+| ---------- | ----------------------------------------- | ----------------------------- |
+| `claim`    | `{ scope, key, fingerprint, lockExpiry }` | [`ClaimResult`](#claimresult) |
+| `complete` | `claim`, `response`, `retention`          | Nothing                       |
+| `release`  | `claim`                                   | Nothing                       |
+
+Each can fail with [`IdempotencyStoreError`](#idempotencystoreerror).
+[Writing a store](/stores/custom) gives the full contract of each operation.
+
+```ts twoslash
+import { Effect } from "effect";
+import { IdempotencyStore } from "effect-idempotency";
+
+const program = Effect.gen(function* () {
+  const store = yield* IdempotencyStore.IdempotencyStore;
+  //    ^?
+});
+```
+
+## layerMemory
+
+A store in the process's memory, as a `Layer.Layer<IdempotencyStore>`.
+
+```ts twoslash
+import { IdempotencyStore } from "effect-idempotency";
+
+const StoreLive = IdempotencyStore.layerMemory;
+//    ^?
+```
+
+It is lost on restart and not shared between processes, so it suits tests,
+development, and a server that runs as one process. See
+[Memory store](/stores/memory).
+
+## layerSql
+
+A store in a SQL database, through the `SqlClient` the application already
+provides. It supports PostgreSQL and SQLite 3.35 or later, and the layer fails
+to build on another database.
+
+```ts twoslash
+import { IdempotencyStore } from "effect-idempotency";
+
+const StoreLive = IdempotencyStore.layerSql({ table: "payment_keys" });
+//    ^?
+```
+
+**Options** (`SqlOptions`)
+
+| Option  | Type     | Default                | Description                                                                                                |
+| ------- | -------- | ---------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `table` | `string` | `"effect_idempotency"` | The table the keys are kept in, created if it does not exist. One name of at most 48 bytes, without a dot. |
+
+**Returns** `Layer.Layer<IdempotencyStore, never, SqlClient.SqlClient>`.
+
+See [SQL store](/stores/sql) for the table, the clean-up of old rows, and what
+it needs from the servers' clocks.
+
+## StoredResponse
+
+A response as the store keeps it, as a schema.
+
+| Field        | Type                     | Description                               |
+| ------------ | ------------------------ | ----------------------------------------- |
+| `status`     | `number` (an integer)    | The status code.                          |
+| `statusText` | `string`, optional       | The status text.                          |
+| `headers`    | `Record<string, string>` | The response headers.                     |
+| `cookies`    | `ReadonlyArray<string>`  | One `Set-Cookie` header value per cookie. |
+| `body`       | `Uint8Array`, optional   | Absent for a response without a body.     |
+
+It is a schema so that a store outside the process can write it down:
+`Schema.toCodecJson(StoredResponse)` encodes it as JSON, with the body in
+base64.
+
+## Fingerprint
+
+What makes two requests the same request, as a branded string schema. The
+middleware computes it and a store only keeps it and gives it back.
+
+## Claim
+
+The right to finish one key.
+
+| Field   | Type                            | Description                       |
+| ------- | ------------------------------- | --------------------------------- |
+| `scope` | `string`                        | The scope the key was claimed in. |
+| `key`   | `IdempotencyKey.IdempotencyKey` | The key.                          |
+| `token` | `string`                        | New with every claim.             |
+
+The store issues a new `token` with every claim, so a request whose claim
+expired cannot complete or release the claim of the request that took the key
+after it.
+
+## ClaimResult
+
+What `claim` found: one of three tagged values.
+
+| `_tag`       | Fields                    | Meaning                                                      |
+| ------------ | ------------------------- | ------------------------------------------------------------ |
+| `Claimed`    | `claim`                   | The key was free, or had expired. The caller now owns it.    |
+| `InProgress` | `fingerprint`             | Another request owns the key and has not finished.           |
+| `Completed`  | `fingerprint`, `response` | A request finished with this key and its response is stored. |
+
+## IdempotencyStoreError
+
+The store could not be reached or could not answer. A tagged error with one
+field, `cause`.
+
+```ts twoslash
+import { IdempotencyStore } from "effect-idempotency";
+
+const error = new IdempotencyStore.IdempotencyStoreError({
+  cause: new Error("connection refused"),
+});
+```
+
+The middleware never passes it to a client:
+[A store that fails](/behaviour/failures#a-store-that-fails) says what a
+request answers instead.

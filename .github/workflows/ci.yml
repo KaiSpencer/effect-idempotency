@@ -50,6 +50,26 @@ jobs:
       - run: bun run build
       - run: bun pm pack --dry-run
 
+  # Builds the documentation site. The build compiles every example on it
+  # against `src/`, so a change that breaks an example fails here.
+  docs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the pinned Bun
+        run: npm install --global "$(node -p 'require("./package.json").packageManager')"
+      # The examples resolve `effect` from the root, so both are installed.
+      - run: bun install --frozen-lockfile
+      - run: bun install --frozen-lockfile
+        working-directory: docs
+      - run: bun run check
+        working-directory: docs
+      - run: bun run build
+        working-directory: docs
+
   # A pull request does not count a dispatched run's check, and main requires
   # `check`. Report the dispatched result as a commit status of that name,
   # which a pull request does count.

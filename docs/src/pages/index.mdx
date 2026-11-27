@@ -1,0 +1,94 @@
+import { Card, Cards } from "vocs";
+
+# effect-idempotency [Idempotency-Key handling for Effect's HttpApi]
+
+`effect-idempotency` is a server middleware for [Effect](https://effect.website)'s
+`HttpApi`. An endpoint that carries it runs once per `Idempotency-Key`, and
+every retry with the same key gets the first response back.
+
+:::warning[In development]
+The server middleware works and is tested, with a store in memory and a store
+in PostgreSQL or SQLite. Both are merged and will be in the next release;
+version 0.0.1 does not have them yet. The client middleware and the Redis
+store are not written. See the [roadmap](/roadmap).
+:::
+
+## Why
+
+A client that times out on `POST /payments` cannot tell whether the payment
+happened. If it retries, it may pay twice. An idempotency key fixes that: the
+client sends one key per operation, and the server runs the operation once per
+key and replays the stored response to every retry.
+
+Effect has no HTTP idempotency support today. The generic TypeScript
+middlewares are built for Express or Hono handlers and know nothing of typed
+errors, layers, `SqlClient` transactions, or the generated `HttpApiClient`.
+
+## What it looks like
+
+Declare a middleware class next to the API, add it to the endpoints that must
+not run twice, and provide it with a scope and a store:
+
+```ts twoslash
+// @filename: Api.ts
+// [!include ~/snippets/Api.ts]
+
+// @filename: Server.ts
+import { Effect, Layer } from "effect";
+import { Idempotency, IdempotencyStore } from "effect-idempotency";
+import { CurrentUser } from "./Api.ts";
+// ---cut---
+class PaymentIdempotency extends Idempotency.Service<
+  PaymentIdempotency,
+  { requires: CurrentUser }
+>()("app/PaymentIdempotency") {}
+
+const PaymentIdempotencyLive = Idempotency.layer(PaymentIdempotency, {
+  // A key belongs to the caller who sent it.
+  scope: Effect.map(CurrentUser, (user) => user.id),
+}).pipe(Layer.provide(IdempotencyStore.layerMemory));
+```
+
+[Getting started](/getting-started) builds the whole example: the API, the
+server and a client that retries.
+
+## What a client sees
+
+| Request                                    | Answer                                                |
+| ------------------------------------------ | ----------------------------------------------------- |
+| No key                                     | `400`                                                 |
+| A key that is not valid                    | `400`                                                 |
+| A new key                                  | The handler runs                                      |
+| A key used before with a different request | `422`                                                 |
+| A key whose first request is still running | `409`                                                 |
+| A key whose first request succeeded        | The stored response, with `Idempotent-Replayed: true` |
+| A key whose first request did not succeed  | The handler runs again                                |
+
+The header and status codes follow the IETF draft
+[The Idempotency-Key HTTP Header Field](https://datatracker.ietf.org/doc/html/draft-ietf-httpapi-idempotency-key-header).
+[How a request is answered](/behaviour/requests) covers each row.
+
+## Where to go next
+
+<Cards>
+  <Card
+    title="Getting started"
+    description="Add a key to one endpoint, serve it, and retry it from a typed client."
+    to="/getting-started"
+  />
+  <Card
+    title="Behaviour"
+    description="What is stored, what is not, and what happens when a client or a process goes away."
+    to="/behaviour/requests"
+  />
+  <Card
+    title="Stores"
+    description="Keep the keys in memory, in PostgreSQL or SQLite, or in a store of your own."
+    to="/stores"
+  />
+  <Card
+    title="AI agents"
+    description="Read these pages as Markdown, or connect an agent to the MCP server."
+    to="/agents"
+  />
+</Cards>

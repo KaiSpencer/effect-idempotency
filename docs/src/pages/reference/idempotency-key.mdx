@@ -1,0 +1,83 @@
+# IdempotencyKey [The Idempotency-Key request header and the key it carries]
+
+```ts
+import { IdempotencyKey } from "effect-idempotency";
+```
+
+| Export                              | Kind     | What it is                                |
+| ----------------------------------- | -------- | ----------------------------------------- |
+| [`IdempotencyKey`](#idempotencykey) | Schema   | A checked key, as a branded string.       |
+| [`FromHeader`](#fromheader)         | Schema   | A codec between a header value and a key. |
+| [`parse`](#parse)                   | Function | Reads the key out of a header value.      |
+| [`headerName`](#headername)         | Constant | `"idempotency-key"`.                      |
+| [`maxLength`](#maxlength)           | Constant | `255`.                                    |
+
+[The key](/behaviour/key) explains the header format.
+
+## IdempotencyKey
+
+An idempotency key: 1 to 255 characters of printable ASCII, as a branded
+string schema. `IdempotencyKey.IdempotencyKey` is also the type of a key.
+
+```ts twoslash
+import { IdempotencyKey } from "effect-idempotency";
+
+const key = IdempotencyKey.IdempotencyKey.make("order-1042");
+//    ^?
+```
+
+The brand means a value of this type has been checked, so a store can size a
+column for it and never sees a key the middleware would have refused.
+
+`make` throws on a string that is not a valid key. Use it for a string you
+trust, such as a UUID you just made. To check a string from outside, decode it
+with the schema or use [`parse`](#parse).
+
+## FromHeader
+
+The key as an `Idempotency-Key` header value: a schema that decodes a header
+string to an [`IdempotencyKey`](#idempotencykey) and encodes it back.
+
+- **Decoding** accepts the value in double quotes, which is the structured
+  field string the IETF draft defines, and bare, as most clients send it. Both
+  give the same key. A bare value cannot contain a comma.
+- **Encoding** writes the quoted form.
+
+Use it for the header in an endpoint definition, so the header is in the
+OpenAPI document and a generated client can send it:
+
+```ts twoslash
+import { Schema } from "effect";
+import { HttpApiEndpoint } from "effect/http-api";
+import { IdempotencyKey } from "effect-idempotency";
+// ---cut---
+const create = HttpApiEndpoint.post("create", "/payments", {
+  headers: Schema.Struct({ "idempotency-key": IdempotencyKey.FromHeader }),
+});
+```
+
+## parse
+
+Reads the key out of an `Idempotency-Key` header value, quoted or bare.
+
+```ts twoslash
+import { IdempotencyKey } from "effect-idempotency";
+
+const key = IdempotencyKey.parse('"order-1042"');
+//    ^?
+```
+
+**Returns** the key, or `undefined` for an empty value, a value outside
+printable ASCII, a bare value with a comma, a quoted string that is not well
+formed, or a key longer than [`maxLength`](#maxlength).
+
+[`FromHeader`](#fromheader) is the same reading as a schema.
+
+## headerName
+
+The header's name, `"idempotency-key"`: lower case, as HTTP/2 and Effect's
+`Headers` carry it.
+
+## maxLength
+
+The longest key accepted, in characters: `255`. Stripe's limit is the same.

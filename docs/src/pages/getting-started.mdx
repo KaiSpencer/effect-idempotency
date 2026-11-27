@@ -1,0 +1,134 @@
+# Getting started [Add an idempotency key to an HttpApi endpoint]
+
+This guide adds an idempotency key to `POST /payments`. At the end, a client
+that sends the same request twice with one key is charged once and gets the
+same payment back both times.
+
+It assumes an API built with Effect's `HttpApi`. The three files below are a
+complete program, and every example on this site is compiled against the
+library.
+
+::::steps
+
+### Install
+
+:::code-group
+
+```bash [bun]
+bun add effect-idempotency effect
+```
+
+```bash [pnpm]
+pnpm add effect-idempotency effect
+```
+
+```bash [npm]
+npm install effect-idempotency effect
+```
+
+:::
+
+`effect` 4.1 or later is a peer dependency.
+
+### Declare the middleware in the API
+
+`Idempotency.Service` declares a middleware class with the four
+[idempotency errors](/errors) already on it. Add it to the endpoints that must
+not run twice, and declare the header with `IdempotencyKey.FromHeader`.
+
+```ts twoslash [Api.ts]
+// [!include ~/snippets/Api.ts]
+```
+
+Three things matter here:
+
+- **The header schema.** `IdempotencyKey.FromHeader` puts the header in the
+  OpenAPI document and makes a generated client ask for it.
+- **`requires`.** It names the services the scope reads, here the current
+  user. Leave it out when the scope reads none.
+- **The order.** A middleware added later runs earlier. `Authentication` is
+  added after `PaymentIdempotency`, so it runs first: the user is known when
+  the scope is read, and an unauthenticated request never reaches the store.
+
+The class is part of the API definition, so it can be shared with a client.
+
+### Provide it on the server
+
+`Idempotency.layer` builds the middleware from two things: a `scope`, which
+says who a key belongs to, and an `IdempotencyStore`, which keeps the keys.
+
+```ts twoslash [Server.ts]
+// @filename: Api.ts
+// [!include ~/snippets/Api.ts]
+
+// @filename: Server.ts
+// ---cut---
+// [!include ~/snippets/Server.ts]
+```
+
+`layerMemory` keeps the keys in the process, which suits development and
+tests. To keep them in the database the application already uses, see
+[the SQL store](/stores/sql).
+
+The example serves with Bun. The middleware is the same on any server Effect
+supports.
+
+### Send a key from the client
+
+The generated client takes an `IdempotencyKey`, a branded string that
+`IdempotencyKey.IdempotencyKey.make` checks, and sends it in the quoted form.
+
+```ts twoslash [Client.ts]
+// @filename: Api.ts
+// [!include ~/snippets/Api.ts]
+
+// @filename: Client.ts
+// ---cut---
+// [!include ~/snippets/Client.ts]
+```
+
+Create one key per operation and keep it for every retry of that operation. A
+new key is a new operation.
+
+### Try it
+
+Run the server, then the client. Both calls return the same payment:
+
+```ts
+{
+  first: { id: "9aa37d43-3a39-46e8-9787-3d42cfe0c6f2", amount: 5 },
+  retry: { id: "9aa37d43-3a39-46e8-9787-3d42cfe0c6f2", amount: 5 },
+}
+```
+
+The same over plain HTTP. The second response carries
+`Idempotent-Replayed: true`:
+
+```bash
+curl -i -X POST http://localhost:3000/payments \
+  -H 'authorization: Bearer dev-token' \
+  -H 'idempotency-key: order-1042' \
+  -H 'content-type: application/json' \
+  -d '{"amount":7}'
+```
+
+```http
+HTTP/1.1 200 OK
+Content-Type: application/json
+idempotent-replayed: true
+
+{"id":"cbcaa570-1baf-4e5a-8e43-09e1031860d2","amount":7}
+```
+
+::::
+
+## Next steps
+
+- [How a request is answered](/behaviour/requests): every answer the
+  middleware can give, and when.
+- [Scope](/behaviour/scope): why the scope is required, and what a constant
+  scope shares.
+- [What is stored](/behaviour/stored-responses): which responses are replayed,
+  and for how long.
+- [The SQL store](/stores/sql): keys that are shared between servers and
+  survive a restart.

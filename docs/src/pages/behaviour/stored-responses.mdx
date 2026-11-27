@@ -1,0 +1,65 @@
+# What is stored [Which responses are replayed, and for how long]
+
+The middleware stores the response of a request that succeeded, and releases
+the key of one that did not.
+
+## What is stored
+
+A response with a status below `400` is stored whole: status, headers, cookies
+and body. It is kept for `retention`, 24 hours by default, counted from when
+the handler finished. After that the key is new.
+
+```ts twoslash
+// @filename: Api.ts
+// [!include ~/snippets/Api.ts]
+
+// @filename: Server.ts
+import { Effect } from "effect";
+import { Idempotency } from "effect-idempotency";
+import { CurrentUser, PaymentIdempotency } from "./Api.ts";
+// ---cut---
+const PaymentIdempotencyLive = Idempotency.layer(PaymentIdempotency, {
+  scope: Effect.map(CurrentUser, (user) => user.id),
+  retention: "7 days",
+});
+```
+
+## What is not stored
+
+Nothing is stored and the key is released when:
+
+- the handler fails with one of its errors,
+- the handler dies,
+- the handler answers `400` or above,
+- the request is refused before the handler, as one that fails validation or
+  has an unsupported content type is.
+
+The next request with the key runs the handler again.
+
+:::warning[A handler that fails must be safe to run again]
+A handler that fails must leave nothing behind, or leave only what a second
+run can repeat. The key does not protect a side effect that happened before
+the failure.
+:::
+
+A response whose body is not bytes in memory, such as a stream, a file or
+form data, is sent but not stored: see [Limits](/behaviour/limits).
+
+## Changes made to the response after the handler
+
+A handler can register a change to be made to its response later, just before
+it is sent. `HttpApiBuilder.securitySetCookie` does this. Such a change is
+stored with the response, so a replay carries the cookie.
+
+The response is stored when the handler returns, and stored again once such a
+change has been made, just before it is sent. Until that second write has
+succeeded, a retry is answered with the response as the handler returned it,
+without the change.
+
+How long that is depends on what the request still does after its handler, and
+on one write to the store. Unless a middleware or another such change waits on
+something, it is a few milliseconds with a database, and the retry it concerns
+was sent while the first request was still being answered.
+
+If the second write fails, it is logged, and the response without the change
+stays stored for its retention and is what every retry gets.

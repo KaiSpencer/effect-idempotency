@@ -1,0 +1,139 @@
+# Idempotency [The server middleware: declare it with Service, provide it with layer]
+
+```ts
+import { Idempotency } from "effect-idempotency";
+```
+
+| Export                              | Kind      | What it is                                        |
+| ----------------------------------- | --------- | ------------------------------------------------- |
+| [`Service`](#service)               | Function  | Declares an idempotency middleware class.         |
+| [`layer`](#layer)                   | Function  | Provides a middleware declared with `Service`.    |
+| [`Options`](#options)               | Interface | The options of `layer`.                           |
+| [`errors`](#errors)                 | Constant  | The errors every idempotency middleware declares. |
+| [`Errors`](#errors)                 | Type      | The type of `errors`.                             |
+| [`replayedHeader`](#replayedheader) | Constant  | The header a replayed response carries.           |
+
+## Service
+
+Declares an idempotency middleware: an `HttpApiMiddleware.Service` class with
+the idempotency errors already declared.
+
+```ts twoslash
+import { Context } from "effect";
+import { Idempotency } from "effect-idempotency";
+
+class CurrentUser extends Context.Service<
+  CurrentUser,
+  { readonly id: string }
+>()("app/CurrentUser") {}
+// ---cut---
+class PaymentIdempotency extends Idempotency.Service<
+  PaymentIdempotency,
+  { requires: CurrentUser }
+>()("app/PaymentIdempotency") {}
+```
+
+**Type parameters**
+
+| Parameter | Description                                                                                        |
+| --------- | -------------------------------------------------------------------------------------------------- |
+| `Self`    | The class being declared.                                                                          |
+| `Config`  | Optional. `{ requires: ... }` names the services the scope reads. Leave it out when it reads none. |
+
+**Arguments**
+
+| Argument | Type     | Description                                                        |
+| -------- | -------- | ------------------------------------------------------------------ |
+| `id`     | `string` | The identifier of the service, such as `"app/PaymentIdempotency"`. |
+
+The class is part of the API definition, so it can be shared with a client.
+Add it to an endpoint, a group or an API with `.middleware(...)`.
+
+The services in `requires` must be provided by a middleware added to the
+endpoint after this one, which runs outside it. See
+[Scope](/behaviour/scope#run-authentication-first).
+
+## layer
+
+Provides an idempotency middleware declared with [`Service`](#service). The
+result is a layer that requires an
+[`IdempotencyStore`](/reference/idempotency-store).
+
+```ts twoslash
+// @filename: Api.ts
+// [!include ~/snippets/Api.ts]
+
+// @filename: Server.ts
+import { Effect, Layer } from "effect";
+import { Idempotency, IdempotencyStore } from "effect-idempotency";
+import { CurrentUser, PaymentIdempotency } from "./Api.ts";
+// ---cut---
+const PaymentIdempotencyLive = Idempotency.layer(PaymentIdempotency, {
+  scope: Effect.map(CurrentUser, (user) => user.id),
+  retention: "24 hours",
+  lockExpiry: "5 minutes",
+}).pipe(Layer.provide(IdempotencyStore.layerMemory));
+//       ^?
+```
+
+**Arguments**
+
+| Argument  | Type                   | Description                                   |
+| --------- | ---------------------- | --------------------------------------------- |
+| `service` | A class from `Service` | The middleware to provide.                    |
+| `options` | [`Options`](#options)  | The scope, the retention and the lock expiry. |
+
+**Returns** `Layer.Layer<Id, never, IdempotencyStore>`, where `Id` is the
+middleware class.
+
+For each request the middleware reads the key and claims it in the store.
+[How a request is answered](/behaviour/requests) lists every outcome.
+
+## Options
+
+The options of [`layer`](#layer).
+
+| Option       | Type                              | Default       | Description                                                                |
+| ------------ | --------------------------------- | ------------- | -------------------------------------------------------------------------- |
+| `scope`      | `Effect.Effect<string, never, R>` | Required      | Who a key belongs to, read once per request. `R` is what `requires` names. |
+| `retention`  | `Duration.Input`                  | `"24 hours"`  | How long a stored response is replayed.                                    |
+| `lockExpiry` | `Duration.Input`                  | `"5 minutes"` | How long a request may hold a key before another request may take it.      |
+
+- **`scope`**: a key is unique within its scope, so two callers that send the
+  same key do not see each other's responses. Return the caller's id on an API
+  with accounts. See [Scope](/behaviour/scope).
+- **`retention`**: counted from when the handler finished. After it the key is
+  new. See [What is stored](/behaviour/stored-responses).
+- **`lockExpiry`**: it matters when a process dies mid-request. Make it longer
+  than the slowest handler. See
+  [Disconnects and failures](/behaviour/failures#a-process-that-dies).
+
+A `Duration.Input` is, for example, a `Duration`, a number of milliseconds, or
+a string such as `"30 seconds"`.
+
+## errors
+
+The errors every idempotency middleware declares, as a tuple of the four
+classes of [`IdempotencyError`](/reference/idempotency-error). `Errors` is its
+type.
+
+```ts twoslash
+import { Idempotency } from "effect-idempotency";
+
+Idempotency.errors;
+//          ^?
+```
+
+`Service` passes it as the middleware's `error`, which is what puts the four
+problems in the OpenAPI document and in a generated client's error channel.
+
+## replayedHeader
+
+The name of the header a replayed response carries, with the value `true`.
+
+```ts twoslash
+import { Idempotency } from "effect-idempotency";
+
+Idempotency.replayedHeader;
+//          ^?
+```
