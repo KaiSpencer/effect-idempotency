@@ -31,9 +31,10 @@ handler again.
 The lock expires for a request that is only slow as well, so set `lockExpiry`
 longer than the slowest handler. A handler that outlives it still stores its
 response if nobody has taken the key. A retry that arrives in the meantime
-takes the key and runs the handler alongside it: the first request still sends
-its response, but its claim is void, and the response that is stored is the
-retry's.
+takes the key and runs the handler alongside it. The first request still sends
+its response, but its claim is void, so that response is not stored. The
+response that is stored is that of the request which still holds the key when
+it finishes.
 
 ```ts twoslash
 // @filename: Api.ts
