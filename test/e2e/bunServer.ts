@@ -42,6 +42,11 @@ export const serve = (
             web,
             server: Bun.serve({
               port: 0,
+              // In development mode Bun prints the error a streamed response
+              // body fails with, which the scenarios cause on purpose, and on
+              // GitHub Actions it reports each one as an annotation on the
+              // fixture. The test still sees the failure as a cut connection.
+              development: false,
               fetch: (request) => web.handler(request),
             }),
           };

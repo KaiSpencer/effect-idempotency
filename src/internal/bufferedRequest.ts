@@ -54,8 +54,9 @@ export const make = (
           ) => make(target.modify(options), body);
         default:
           // With the proxy as `this`, the original's `text`, `json` and
-          // `urlParamsBody` read `arrayBuffer` above.
-          return Reflect.get(target, property, receiver);
+          // `urlParamsBody` read `arrayBuffer` above. A proxy hands values on
+          // whatever their type, so `unknown` says no more than it knows.
+          return Reflect.get(target, property, receiver) as unknown;
       }
     },
   });
