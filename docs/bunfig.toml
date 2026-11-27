@@ -1,0 +1,4 @@
+[install]
+# Supply-chain guard, as in the repository root: never install a version
+# published less than 3 days ago.
+minimumReleaseAge = 259200

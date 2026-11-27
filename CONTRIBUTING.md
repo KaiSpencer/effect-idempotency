@@ -18,6 +18,7 @@ bun lint --fix    # lint and apply fixes
 bun check         # typecheck
 bun test          # tests
 bun run build     # bundle src/index.ts into dist/, with declarations
+bun run docs      # the documentation site, at http://localhost:5173
 bun stage         # publish a version the release workflow staged on npm
 ```
 
@@ -86,6 +87,49 @@ of a block.
 `test/fixtures/Payments.ts` is the API the pipeline and end-to-end tests run
 against. Its control endpoints hold a charge open and count the charges, so a
 test can ask "did the handler run twice?" over HTTP.
+
+## Documentation
+
+The documentation site is in `docs/`, built with [Vocs](https://vocs.dev). It
+is a package of its own, with its own lockfile, so that React and Vite stay
+out of the library's install. Its examples import `effect` from the
+repository root, so run `bun install` there first. These run from the root,
+and install the site's own dependencies when they are missing:
+
+```bash
+bun run docs           # the site, at http://localhost:5173
+bun run docs:check     # typecheck the config and the snippets
+bun run docs:build     # build it, as CI does
+```
+
+- **Pages** are MDX files in `docs/src/pages`. A new page also goes in the
+  `sidebar` of `docs/vocs.config.ts`.
+- **Examples** are fenced as `ts twoslash`. The build compiles each against
+  `src/`, with the compiler options the library is checked with, and fails on
+  a type error. So a change to the library that breaks an example fails the
+  `docs` job of `ci.yml`.
+- **Shared code** for the examples is in `docs/src/snippets`. A block pulls
+  it in with `// [!include ~/snippets/Api.ts]`, and hides what is above
+  `// ---cut---`.
+- **Agents** read the same pages as Markdown: `/llms.txt`, `/llms-full.txt`,
+  any page with `.md` added, and an MCP server at `/api/mcp`.
+  `docs/src/markdownOutput.ts` makes the code in that Markdown read as the
+  page shows it. Start a page with `# Title [One-line summary]`: the summary
+  is its entry in `/llms.txt`.
+
+A change users can see updates the pages that describe it.
+
+### Deployment
+
+The site is made for [Vercel](https://vercel.com), with the project's Root
+Directory set to `docs`. `docs/vercel.json` holds the install and build
+commands: the install also installs the repository root, where the examples
+find `effect`. Vocs detects Vercel and builds the pages as static files and
+the MCP server as a function.
+
+The site's address comes from Vercel's own environment variables, so there is
+none to set. `GITHUB_TOKEN` is optional: with it, the MCP server reads the
+source from GitHub at the higher rate limit.
 
 ## Changes
 

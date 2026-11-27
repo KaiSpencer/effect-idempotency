@@ -1,0 +1,97 @@
+# The key [What an Idempotency-Key header may carry, and how it is read]
+
+A client names an operation with the `Idempotency-Key` request header. The
+middleware reads it before anything else.
+
+## What a key is
+
+A key is 1 to 255 characters of printable ASCII. Stripe's limit is the same.
+A UUID is a good key:
+
+```http
+Idempotency-Key: "8e03978e-40d5-43e8-bc93-6894a57f9324"
+```
+
+## Quoted and bare
+
+The header value is accepted in two forms, and both give the same key:
+
+- **Quoted**, as the IETF draft's structured-field syntax requires:
+  `"order-1042"`. Inside the quotes, a quote or a backslash is escaped with a
+  backslash.
+- **Bare**, as most clients send it: `order-1042`.
+
+A bare key cannot contain a comma. Two `Idempotency-Key` headers arrive joined
+by one, and which key was meant cannot be told, so the request is refused.
+Quote a key that has a comma.
+
+| Header value   | Key          |
+| -------------- | ------------ |
+| `order-1042`   | `order-1042` |
+| `"order-1042"` | `order-1042` |
+| `"a,b"`        | `a,b`        |
+| `a,b`          | Refused      |
+| An empty value | Refused      |
+| 256 characters | Refused      |
+| `"unfinished`  | Refused      |
+
+A refused value is answered `400` with
+[`IdempotencyKeyInvalid`](/errors#idempotency-key-invalid), and a request
+without the header with
+[`IdempotencyKeyMissing`](/errors#idempotency-key-missing).
+
+## Declaring the header on an endpoint
+
+Declare the header with `IdempotencyKey.FromHeader`. That puts it in the
+OpenAPI document and makes a generated client ask for it:
+
+```ts twoslash
+// @filename: Api.ts
+// [!include ~/snippets/Api.ts]
+// @filename: Endpoint.ts
+import { Schema } from "effect";
+import { HttpApiEndpoint } from "effect/http-api";
+import { IdempotencyKey } from "effect-idempotency";
+import { Payment } from "./Api.ts";
+// ---cut---
+const create = HttpApiEndpoint.post("create", "/payments", {
+  headers: Schema.Struct({ "idempotency-key": IdempotencyKey.FromHeader }),
+  payload: Schema.Struct({ amount: Schema.Number }),
+  success: Payment,
+});
+```
+
+`FromHeader` is a codec between the header value and the key. Decoding accepts
+both forms; encoding writes the quoted form, so that is what a generated
+client sends.
+
+The middleware reads the header itself, so it refuses a missing or invalid
+key with its own errors whether or not the endpoint declares the header.
+
+## Making a key on the client
+
+`IdempotencyKey.IdempotencyKey` is a branded string. `make` checks a string
+and brands it:
+
+```ts twoslash
+import { IdempotencyKey } from "effect-idempotency";
+
+const key = IdempotencyKey.IdempotencyKey.make(crypto.randomUUID());
+//    ^?
+```
+
+The brand means the value has been checked, so a store can size a column for
+it and never sees a key the middleware would have refused.
+
+## Reading a header value yourself
+
+`IdempotencyKey.parse` is the same reading as a function. It returns
+`undefined` for a value the middleware would refuse:
+
+```ts twoslash
+import { IdempotencyKey } from "effect-idempotency";
+
+IdempotencyKey.parse('"order-1042"'); // "order-1042"
+IdempotencyKey.parse("order-1042"); // "order-1042"
+IdempotencyKey.parse("a,b"); // undefined
+```

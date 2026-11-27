@@ -8,5 +8,8 @@ coverage/
 .npmrc
 .DS_Store
 
+# The link to the Vercel project of `docs/`, made by `vercel link`.
+.vercel
+
 # Reference source for coding agents, cloned by `bun run repos:sync`.
 /repos/

@@ -1,0 +1,36 @@
+# Limits [What the middleware does not do]
+
+## Streams, files and multipart bodies
+
+A response whose body is not bytes in memory, such as a stream, a file or form
+data, is sent but not stored, so a retry runs the handler again.
+
+A request whose payload is a stream or a multipart upload is not supported.
+See [issue #3](https://github.com/KaiSpencer/effect-idempotency/issues/3).
+
+## Checks inside the handler are not repeated
+
+A replay does not run the handler, so a permission check inside the handler is
+not repeated. Put checks that must hold on every request in a middleware that
+runs outside this one, as authentication does: see
+[Scope](/behaviour/scope#run-authentication-first).
+
+## The body is compared byte for byte
+
+The same JSON with different whitespace or key order is a different request,
+and is answered `422`. A retry that resends the bytes it sent before is not
+affected.
+
+## One key header per request
+
+Two `Idempotency-Key` headers are refused, because they arrive joined by a
+comma and which key was meant cannot be told. See
+[The key](/behaviour/key#quoted-and-bare).
+
+## Store limits
+
+Each store has limits of its own:
+
+- [Memory](/stores/memory#limits): one process, lost on restart, no size
+  limit.
+- [SQL](/stores/sql#limits): PostgreSQL and SQLite only.

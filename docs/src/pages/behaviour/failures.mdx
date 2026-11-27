@@ -1,0 +1,69 @@
+# Disconnects and failures [What happens when a client, a process or the store goes away]
+
+An idempotency key exists for the cases where something goes wrong half way.
+This page says what the middleware does in each.
+
+## A client that disconnects
+
+Once a request has claimed its key the middleware does not let it be
+interrupted, so a disconnect does not stop the handler. A client that timed
+out gets `409` while the handler is still running and the stored response
+after.
+
+Without this, the disconnect would stop the handler part way and the retry
+would run its side effect a second time.
+
+## A server that shuts down
+
+The same holds at shutdown: the server cannot interrupt the request, and one
+that waits for requests in flight waits for these until their handlers finish.
+
+:::tip
+Give a handler that can hang its own `Effect.timeout`, which still works.
+:::
+
+## A process that dies
+
+A request holds its key for `lockExpiry`, 5 minutes by default. If the process
+dies mid-request, another request can take the key after that and run the
+handler again.
+
+The lock expires for a request that is only slow as well, so set `lockExpiry`
+longer than the slowest handler. A handler that outlives it still stores its
+response if nobody has taken the key. A retry that arrives in the meantime
+takes the key and runs the handler alongside it. The first request still sends
+its response, but its claim is void, so that response is not stored. The
+response that is stored is that of the request which still holds the key when
+it finishes.
+
+```ts twoslash
+// @filename: Api.ts
+// [!include ~/snippets/Api.ts]
+
+// @filename: Server.ts
+import { Effect } from "effect";
+import { Idempotency } from "effect-idempotency";
+import { CurrentUser, PaymentIdempotency } from "./Api.ts";
+// ---cut---
+const PaymentIdempotencyLive = Idempotency.layer(PaymentIdempotency, {
+  scope: Effect.map(CurrentUser, (user) => user.id),
+  lockExpiry: "15 minutes",
+});
+```
+
+:::warning[A crash can still run a side effect twice]
+A crash between the side effect and the stored response means the side effect
+can happen twice. The transactional mode on the [roadmap](/roadmap) closes
+this gap for handlers that write to the same database as the store.
+:::
+
+## A store that fails
+
+| The store fails to | The request                                                                            |
+| ------------------ | -------------------------------------------------------------------------------------- |
+| Claim the key      | Answers `500`. The handler does not run.                                               |
+| Store the response | Sends the response. The key stays claimed until `lockExpiry`.                          |
+| Release the key    | Sends its answer. The failure is logged, and the key stays claimed until `lockExpiry`. |
+
+If the store is a database and the database is down, every endpoint that
+carries the middleware answers `500`.

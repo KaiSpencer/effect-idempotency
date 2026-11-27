@@ -1,0 +1,5 @@
+.vocs/
+.vercel/
+dist/
+# Written by the dev server.
+src/pages.gen.ts

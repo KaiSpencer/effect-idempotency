@@ -1,0 +1,72 @@
+# How a request is answered [Every answer the middleware gives to a request with a key]
+
+The header and status codes follow the IETF draft
+[The Idempotency-Key HTTP Header Field](https://datatracker.ietf.org/doc/html/draft-ietf-httpapi-idempotency-key-header).
+The draft leaves the hard parts open, so those follow Stripe's documented
+behaviour where Stripe documents one.
+
+## The answers
+
+| Request                                    | Answer                                                | Error                                                             |
+| ------------------------------------------ | ----------------------------------------------------- | ----------------------------------------------------------------- |
+| No key                                     | `400`                                                 | [`IdempotencyKeyMissing`](/errors#idempotency-key-missing)        |
+| A key that is not valid                    | `400`                                                 | [`IdempotencyKeyInvalid`](/errors#idempotency-key-invalid)        |
+| A new key                                  | The handler runs                                      |                                                                   |
+| A key used before with a different request | `422`                                                 | [`IdempotencyKeyMismatch`](/errors#idempotency-key-mismatch)      |
+| A key whose first request is still running | `409`                                                 | [`IdempotencyKeyInProgress`](/errors#idempotency-key-in-progress) |
+| A key whose first request succeeded        | The stored response, with `Idempotent-Replayed: true` |                                                                   |
+| A key whose first request did not succeed  | The handler runs again                                |                                                                   |
+
+A request succeeded when its handler answered with a status below `400`.
+[What is stored](/behaviour/stored-responses) says exactly which responses are
+kept and which release the key.
+
+## The same request
+
+Two requests are the same when their method, path, query string and body
+bytes are the same. The body is compared byte for byte: the same JSON with
+different whitespace is a different request. A retry sends the bytes it sent
+before, so this only rejects a client that reuses a key.
+
+A key that arrives with a different request is answered `422`, whether the
+first request is still running or has finished.
+
+## A replayed response
+
+A replay is the first response as it was sent: status, headers, cookies and
+body. The middleware adds one header, `Idempotent-Replayed: true`, so a client
+can tell a replay from a first answer. The header name is exported as
+`Idempotency.replayedHeader`.
+
+A replay does not run the handler. A permission check inside the handler is
+therefore not repeated: see [Limits](/behaviour/limits).
+
+## How long each state lasts
+
+| State                           | Lasts                                                    | Option       | Default   |
+| ------------------------------- | -------------------------------------------------------- | ------------ | --------- |
+| The first request holds the key | Until its handler finishes, and for `lockExpiry` at most | `lockExpiry` | 5 minutes |
+| The response is stored          | For `retention`, from when the handler finished          | `retention`  | 24 hours  |
+
+After `retention` the key is new again.
+
+After `lockExpiry` another request may take the key, whether the process that
+held it died or its handler is only slow. Set it longer than the slowest
+handler, or a retry runs the handler a second time alongside the first: see
+[Disconnects and failures](/behaviour/failures#a-process-that-dies).
+
+```ts twoslash
+// @filename: Api.ts
+// [!include ~/snippets/Api.ts]
+
+// @filename: Server.ts
+import { Effect } from "effect";
+import { Idempotency } from "effect-idempotency";
+import { CurrentUser, PaymentIdempotency } from "./Api.ts";
+// ---cut---
+const PaymentIdempotencyLive = Idempotency.layer(PaymentIdempotency, {
+  scope: Effect.map(CurrentUser, (user) => user.id),
+  retention: "7 days",
+  lockExpiry: "2 minutes",
+});
+```

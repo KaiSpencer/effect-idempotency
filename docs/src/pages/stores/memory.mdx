@@ -1,0 +1,35 @@
+# Memory store [Keys kept in the process]
+
+`IdempotencyStore.layerMemory` keeps the keys and the stored responses in the
+process's memory. It needs nothing else.
+
+```ts twoslash
+// @filename: Api.ts
+// [!include ~/snippets/Api.ts]
+
+// @filename: Server.ts
+import { Effect, Layer } from "effect";
+import { Idempotency, IdempotencyStore } from "effect-idempotency";
+import { CurrentUser, PaymentIdempotency } from "./Api.ts";
+// ---cut---
+const PaymentIdempotencyLive = Idempotency.layer(PaymentIdempotency, {
+  scope: Effect.map(CurrentUser, (user) => user.id),
+}).pipe(Layer.provide(IdempotencyStore.layerMemory));
+```
+
+## When to use it
+
+It suits tests, development, and a small server that runs as one process.
+
+In a test it reads the time from Effect's `Clock`, so the `TestClock` moves a
+key past its lock expiry or its retention.
+
+## Limits
+
+- It lives in one process. Two servers do not share keys, so a retry that
+  reaches the other server runs the handler again.
+- It is lost on restart.
+- It has no size limit: every stored response stays in memory for the
+  retention.
+
+For anything else, use [the SQL store](/stores/sql).

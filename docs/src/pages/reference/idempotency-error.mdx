@@ -1,0 +1,65 @@
+# IdempotencyError [The errors the middleware answers with, as RFC 9457 problems]
+
+```ts twoslash
+import { IdempotencyError } from "effect-idempotency";
+```
+
+| Export                     | Status | Title                                                          |
+| -------------------------- | ------ | -------------------------------------------------------------- |
+| `IdempotencyKeyMissing`    | `400`  | The Idempotency-Key header is missing.                         |
+| `IdempotencyKeyInvalid`    | `400`  | The Idempotency-Key header is not a valid key.                 |
+| `IdempotencyKeyMismatch`   | `422`  | The Idempotency-Key was already used with a different request. |
+| `IdempotencyKeyInProgress` | `409`  | A request with this Idempotency-Key is still in progress.      |
+
+Each is an `HttpApiError.Problem` class. It is a schema, so an endpoint that
+carries the middleware documents it in OpenAPI and a generated client receives
+it in its error channel.
+
+[Errors](/errors) explains when each is answered and how to fix it.
+
+## Matching an error
+
+Each class has a `_tag` equal to its name, so `Effect.catchTag` picks one out
+of a client call:
+
+```ts twoslash
+// @filename: Api.ts
+// [!include ~/snippets/Api.ts]
+
+// @filename: Client.ts
+import { Effect } from "effect";
+import { HttpApiClient } from "effect/http-api";
+import { IdempotencyKey } from "effect-idempotency";
+import { Api } from "./Api.ts";
+// ---cut---
+const pay = Effect.gen(function* () {
+  const client = yield* HttpApiClient.make(Api);
+  const key = IdempotencyKey.IdempotencyKey.make(crypto.randomUUID());
+
+  return yield* client.payments
+    .create({ headers: { "idempotency-key": key }, payload: { amount: 5 } })
+    .pipe(
+      Effect.catchTag("IdempotencyKeyMismatch", (error) =>
+        Effect.logWarning("The key was reused for another request", error),
+      ),
+    );
+});
+```
+
+## The problem type
+
+The `type` of each problem is a link to its section of the README and never
+changes:
+
+| Error                      | `type`                                                                         |
+| -------------------------- | ------------------------------------------------------------------------------ |
+| `IdempotencyKeyMissing`    | `https://github.com/KaiSpencer/effect-idempotency#idempotency-key-missing`     |
+| `IdempotencyKeyInvalid`    | `https://github.com/KaiSpencer/effect-idempotency#idempotency-key-invalid`     |
+| `IdempotencyKeyMismatch`   | `https://github.com/KaiSpencer/effect-idempotency#idempotency-key-mismatch`    |
+| `IdempotencyKeyInProgress` | `https://github.com/KaiSpencer/effect-idempotency#idempotency-key-in-progress` |
+
+## Declaring them yourself
+
+`Idempotency.Service` already declares all four on the middleware. To declare
+them elsewhere, [`Idempotency.errors`](/reference/idempotency#errors) is the
+four classes as a tuple.

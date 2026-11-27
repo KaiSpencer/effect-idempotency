@@ -1,0 +1,101 @@
+# Scope [Who a key belongs to]
+
+A key is unique within the scope the `scope` option returns for the request.
+The same key in two scopes is two keys.
+
+## Scope keys to the caller
+
+With the caller's id as the scope, two callers that send the same key never
+see each other's responses:
+
+```ts twoslash
+// @filename: Api.ts
+// [!include ~/snippets/Api.ts]
+
+// @filename: Server.ts
+import { Effect } from "effect";
+import { Idempotency } from "effect-idempotency";
+import { CurrentUser, PaymentIdempotency } from "./Api.ts";
+// ---cut---
+const PaymentIdempotencyLive = Idempotency.layer(PaymentIdempotency, {
+  scope: Effect.map(CurrentUser, (user) => user.id),
+});
+```
+
+The scope is an Effect that is read once per request. It can read any service
+the request has, such as the current user or the tenant.
+
+## Name what the scope reads
+
+The middleware class names the services its scope reads in `requires`:
+
+```ts twoslash
+// @filename: Api.ts
+// [!include ~/snippets/Api.ts]
+
+// @filename: Middleware.ts
+import { Idempotency } from "effect-idempotency";
+import { CurrentUser } from "./Api.ts";
+// ---cut---
+class PaymentIdempotency extends Idempotency.Service<
+  PaymentIdempotency,
+  { requires: CurrentUser }
+>()("app/PaymentIdempotency") {}
+```
+
+Leave `requires` out when the scope reads none.
+
+## Run authentication first
+
+The services in `requires` must be provided by a middleware added to the
+endpoint **after** the idempotency middleware. A middleware added later runs
+earlier, so it runs outside this one:
+
+```ts twoslash
+// @filename: Api.ts
+// [!include ~/snippets/Api.ts]
+
+// @filename: Group.ts
+import { Schema } from "effect";
+import { HttpApiEndpoint, HttpApiGroup } from "effect/http-api";
+import { IdempotencyKey } from "effect-idempotency";
+import { Authentication, Payment, PaymentIdempotency } from "./Api.ts";
+
+const create = HttpApiEndpoint.post("create", "/payments", {
+  headers: Schema.Struct({ "idempotency-key": IdempotencyKey.FromHeader }),
+  success: Payment,
+});
+// ---cut---
+const Payments = HttpApiGroup.make("payments")
+  .add(create)
+  .middleware(PaymentIdempotency)
+  // Added after, so it runs first and the user is known.
+  .middleware(Authentication);
+```
+
+This order has a second effect: an unauthenticated request never reaches the
+store.
+
+## A constant scope shares every key
+
+The option is required so that sharing keys between all callers is a choice
+and not a default.
+
+:::danger[A constant scope replays one caller's response to another]
+With a constant scope, such as `Effect.succeed("public")`, whoever sends a key
+and request that were used before gets the stored response, cookies included.
+Only use one on an API where that is acceptable.
+:::
+
+```ts twoslash
+import { Effect } from "effect";
+import { Idempotency } from "effect-idempotency";
+// ---cut---
+class WebhookIdempotency extends Idempotency.Service<WebhookIdempotency>()(
+  "app/WebhookIdempotency",
+) {}
+
+const WebhookIdempotencyLive = Idempotency.layer(WebhookIdempotency, {
+  scope: Effect.succeed("public"),
+});
+```

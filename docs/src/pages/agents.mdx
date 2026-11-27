@@ -1,0 +1,72 @@
+# AI agents [Read these docs as Markdown, or connect an agent to them]
+
+Every page of this site is also plain Markdown, and the site runs an MCP
+server. A coding agent can read the documentation, search it, and read the
+library's source without scraping HTML.
+
+## Markdown
+
+| Address                   | What it is                                       |
+| ------------------------- | ------------------------------------------------ |
+| `/llms.txt`               | An index of every page, with a one-line summary. |
+| `/llms-full.txt`          | Every page in one Markdown file.                 |
+| Any page with `.md` added | That page as Markdown, such as `/stores/sql.md`. |
+
+A request from a known AI user agent gets the Markdown without asking for it.
+The **Ask AI** menu on each page copies the page as Markdown or opens it in an
+assistant.
+
+The code in the Markdown is the code the page shows. Every TypeScript example
+is compiled against the library when the site is built, so an example that no
+longer matches the library fails the build instead of reaching an agent.
+
+## MCP server
+
+The site serves a [Model Context Protocol](https://modelcontextprotocol.io)
+server at `/api/mcp`. Add that address, on this site's domain, to an MCP
+client. **Ask AI → Copy MCP URL** copies it.
+
+| Tool                | What it does                                       |
+| ------------------- | -------------------------------------------------- |
+| `list_pages`        | Lists the pages of this site.                      |
+| `read_page`         | Reads one page as Markdown.                        |
+| `search_docs`       | Searches the text of the pages.                    |
+| `list_sources`      | Lists the source repositories, here one.           |
+| `get_file_tree`     | Shows the files of the library's `src` and `test`. |
+| `list_source_files` | Lists the files of one directory.                  |
+| `read_source_file`  | Reads one source file.                             |
+| `search_source`     | Searches the source code.                          |
+
+All of them are read-only. The source tools read `src` and `test` of
+[the repository](https://github.com/KaiSpencer/effect-idempotency): the tests
+show how each module is meant to be used.
+
+## What an agent should get right
+
+These are the points where an integration most often goes wrong. Each links to
+the page that explains it.
+
+1. **Declare the middleware with `Idempotency.Service` and provide it with
+   `Idempotency.layer`.** The class goes in the API definition and the layer
+   on the server. See [Getting started](/getting-started).
+2. **`scope` is required.** Return the caller's id. A constant scope replays
+   one caller's response to another. See [Scope](/behaviour/scope).
+3. **Add the authentication middleware after the idempotency middleware.** A
+   middleware added later runs earlier, and the scope needs the user. See
+   [Scope](/behaviour/scope#run-authentication-first).
+4. **Name what the scope reads in `requires`.** Without it the layer does not
+   type-check.
+5. **Declare the header with `IdempotencyKey.FromHeader`.** That is what makes
+   a generated client send it.
+6. **Provide an `IdempotencyStore`.** `layerMemory` for tests and one process,
+   `layerSql()` otherwise. See [Choosing a store](/stores).
+7. **Make one key per operation, outside any retry.** A new key is a new
+   operation. See [Errors](/errors#handling-them-in-a-client).
+8. **A handler that fails runs again on the next request.** Only a response
+   below `400` is stored. See
+   [What is stored](/behaviour/stored-responses#what-is-not-stored).
+9. **A transaction middleware goes inside the idempotency middleware.** See
+   [SQL store](/stores/sql#transactions).
+
+The client middleware and the Redis store do not exist yet: see the
+[roadmap](/roadmap). Do not import them.

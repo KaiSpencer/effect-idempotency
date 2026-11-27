@@ -1,0 +1,93 @@
+# Errors [The four problems the middleware answers with]
+
+Errors are `application/problem+json`
+([RFC 9457](https://www.rfc-editor.org/rfc/rfc9457)). Each is a schema in
+`IdempotencyError`, so an endpoint that carries the middleware documents them
+in OpenAPI, and a generated client receives them in its error channel.
+
+| Error                                                      | Status | When                                              |
+| ---------------------------------------------------------- | ------ | ------------------------------------------------- |
+| [`IdempotencyKeyMissing`](#idempotency-key-missing)        | `400`  | The request has no `Idempotency-Key` header.      |
+| [`IdempotencyKeyInvalid`](#idempotency-key-invalid)        | `400`  | The header is not a valid key.                    |
+| [`IdempotencyKeyMismatch`](#idempotency-key-mismatch)      | `422`  | The key was first used with a different request.  |
+| [`IdempotencyKeyInProgress`](#idempotency-key-in-progress) | `409`  | The first request with this key is still running. |
+
+## The response body
+
+Each problem has a `type`, a `status` and a `title`:
+
+```json
+{
+  "type": "https://github.com/KaiSpencer/effect-idempotency#idempotency-key-missing",
+  "status": 400,
+  "title": "The Idempotency-Key header is missing."
+}
+```
+
+The `type` of each problem is a link to its section of the README and never
+changes, so a client can match on it.
+
+## Idempotency key missing
+
+`400`, `IdempotencyKeyMissing`. The request has no `Idempotency-Key` header.
+
+**Fix:** send the header. See [The key](/behaviour/key).
+
+## Idempotency key invalid
+
+`400`, `IdempotencyKeyInvalid`. The header is empty, longer than 255
+characters, outside printable ASCII, or a quoted string that is not well
+formed. A bare value with a comma is refused too, which is what two
+`Idempotency-Key` headers on one request look like.
+
+**Fix:** send one key of 1 to 255 printable ASCII characters, and quote it if
+it has a comma.
+
+## Idempotency key mismatch
+
+`422`, `IdempotencyKeyMismatch`. The key was first used with a different
+request: another method, path, query string or body.
+
+**Fix:** send a new key for a new request. To retry, resend the same bytes
+with the same key.
+
+## Idempotency key in progress
+
+`409`, `IdempotencyKeyInProgress`. The first request with this key is still
+running.
+
+**Fix:** retry after a short wait. The retry gets the stored response once the
+first request has finished.
+
+## Handling them in a client
+
+A generated client fails with these errors as typed values, so a `409` can be
+retried by its tag:
+
+```ts twoslash
+// @filename: Api.ts
+// [!include ~/snippets/Api.ts]
+
+// @filename: Client.ts
+import { Effect, Schedule } from "effect";
+import { HttpApiClient } from "effect/http-api";
+import { IdempotencyKey } from "effect-idempotency";
+import { Api } from "./Api.ts";
+// ---cut---
+const pay = Effect.gen(function* () {
+  const client = yield* HttpApiClient.make(Api);
+  const key = IdempotencyKey.IdempotencyKey.make(crypto.randomUUID());
+
+  return yield* client.payments
+    .create({ headers: { "idempotency-key": key }, payload: { amount: 5 } })
+    .pipe(
+      Effect.retry({
+        while: (error) => error._tag === "IdempotencyKeyInProgress",
+        schedule: Schedule.exponential("200 millis"),
+        times: 5,
+      }),
+    );
+});
+```
+
+The key is made once, outside the retry, so every attempt sends the same one.

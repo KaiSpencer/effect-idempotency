@@ -1,0 +1,20 @@
+{
+  "name": "effect-idempotency-docs",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vocs dev",
+    "build": "vocs build",
+    "preview": "vocs preview",
+    "check": "tsc"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.7",
+    "react": "~19.3.0",
+    "react-dom": "~19.3.0",
+    "typescript": "^6",
+    "vite": "^8.3.8",
+    "vocs": "^2.14.1",
+    "waku": "^1.0.0-rc.5"
+  }
+}
