@@ -327,17 +327,34 @@ export const layer = <Id, Requires>(
 
               // What the handler opens for its response, such as a database
               // cursor its stream reads from, lives in a scope of its own.
-              // Usually it closes with the request's. The server closes that
-              // one when a client leaves a streamed response, though, and the
-              // middleware reads on, so the scope of a streamed response
-              // passes to the fiber that reads it, which closes it at the end.
+              // It closes once the request has finished, the changes made to
+              // the response before it is sent included, and, for a streamed
+              // response, once the fiber that reads the stream has finished
+              // too: whichever comes last. The server closes the request's
+              // scope when a client leaves a streamed response, but the
+              // middleware reads on, so that alone is not enough. Effect
+              // closes a request's scope the same way when its body is a
+              // stream, and with the stream's exit when there is one.
               const requestScope = yield* Scope.Scope;
               const handlerScope = yield* Scope.make();
-              const handlerScopeOwner = { stream: false };
+              const handlerScopeJoin: {
+                parts: number;
+                request?: Exit.Exit<unknown, unknown>;
+                stream?: Exit.Exit<unknown, unknown>;
+              } = { parts: 1 };
+              const leaveHandlerScope = (
+                part: "request" | "stream",
+                exit: Exit.Exit<unknown, unknown>,
+              ) =>
+                Effect.suspend(() => {
+                  handlerScopeJoin[part] = exit;
+                  handlerScopeJoin.parts -= 1;
+                  return handlerScopeJoin.parts === 0
+                    ? Scope.close(handlerScope, handlerScopeJoin.stream ?? exit)
+                    : Effect.void;
+                });
               yield* Scope.addFinalizerExit(requestScope, (exit) =>
-                handlerScopeOwner.stream
-                  ? Effect.void
-                  : Scope.close(handlerScope, exit),
+                leaveHandlerScope("request", exit),
               );
 
               const exit = yield* Effect.exit(
@@ -406,9 +423,19 @@ export const layer = <Id, Requires>(
               // go wrong: from now on a retry is answered with it and the
               // handler does not run again. A streamed one is stored by the
               // fiber that reads it, when it ends.
-              handlerScopeOwner.stream = kind._tag === "Stream";
+              // The fiber that reads a streamed response holds the handler's
+              // scope open too, through a scope of its own that it closes when
+              // it has finished.
+              const streamScope =
+                kind._tag === "Stream" ? yield* Scope.make() : undefined;
+              if (streamScope !== undefined) {
+                handlerScopeJoin.parts += 1;
+                yield* Scope.addFinalizerExit(streamScope, (exit) =>
+                  leaveHandlerScope("stream", exit),
+                );
+              }
               const streamed =
-                kind._tag === "Stream"
+                streamScope !== undefined
                   ? yield* StreamedResponse.make({
                       response: returned,
                       maxBytes: maxStoredBytes,
@@ -418,7 +445,7 @@ export const layer = <Id, Requires>(
                         return write;
                       },
                       onDiscard: release,
-                      scope: handlerScope,
+                      scope: streamScope,
                       // Past the lock expiry another request may hold the key,
                       // so a stream nobody reads is not read for longer.
                       abandonAfter: Effect.flatMap(

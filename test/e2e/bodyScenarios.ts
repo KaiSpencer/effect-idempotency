@@ -31,9 +31,10 @@ const asAlice = HttpClientRequest.setHeaders({
 });
 
 /** A receipt streamed as `receipt for <payment id>`, charged part way. */
-const receipt = (amount: number): Response =>
+const receipt = (amount: number, headers?: Record<string, string>): Response =>
   HttpClientRequest.post("/payments/receipt").pipe(
     asAlice,
+    HttpClientRequest.setHeaders(headers ?? {}),
     HttpClientRequest.bodyText(JSON.stringify({ amount }), "application/json"),
     Client.execute,
   );
@@ -119,6 +120,29 @@ export const bodyScenarios = (
         expect(retry.headers["idempotent-replayed"]).toBe("true");
         expect(retry.headers["content-type"]).toBe("text/plain");
         expect(yield* retry.text).toBe("receipt for pay_1");
+        expect(yield* charges).toBe(1);
+      }));
+
+    // The stream is short, so it can be read to the end before the server
+    // sends the response, and so before the handler's change is made. The
+    // handler runs in the request's own scope, which closes only once the
+    // response has been sent.
+    test("keeps what the handler opened until its change to the response is made, and replays the change", () =>
+      Effect.gen(function* () {
+        const inRequestScope = () => receipt(5, { "x-request-scope": "yes" });
+        const first = yield* inRequestScope();
+        expect(first.headers["x-printer"]).toBe("open");
+        yield* first.text;
+
+        let retry = yield* untilSettled(inRequestScope());
+        // The change is stored by a second write, which can land just after
+        // the stream's.
+        while (retry.headers["x-printer"] === undefined) {
+          yield* Effect.sleep("1 millis");
+          retry = yield* untilSettled(inRequestScope());
+        }
+        expect(retry.headers["idempotent-replayed"]).toBe("true");
+        expect(retry.headers["x-printer"]).toBe("open");
         expect(yield* charges).toBe(1);
       }));
 

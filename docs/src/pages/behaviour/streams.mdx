@@ -35,8 +35,9 @@ other once the stream has ended.
   sent, or part way through the body.
 
 What the handler opens in its scope for the stream to read from, such as a
-database cursor, stays open until the middleware has finished reading the
-stream, even after the client has gone, and is closed then.
+database cursor, stays open until both the response has been sent, changes
+made to it just before included, and the middleware has finished reading the
+stream, even after the client has gone. It is closed then.
 
 A replay sends the stored bytes as one body, with a `Content-Length`. A
 client reading a replayed NDJSON or server-sent event stream receives every

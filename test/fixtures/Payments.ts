@@ -11,6 +11,7 @@
  */
 import { Context, Effect, Latch, Layer, Schema, Stream } from "effect";
 import {
+  HttpEffect,
   HttpServerRequest,
   HttpServerResponse,
   type Multipart,
@@ -201,33 +202,43 @@ const PaymentsHandlers = HttpApiBuilder.group(
         // The first chunk is sent before the charge starts, so a test that
         // holds charges holds the response part way through. The stream
         // reads from a resource the handler opens in its scope, as it would
-        // from a database cursor, and dies if that is closed under it.
+        // from a database cursor, and dies if that is closed under it. So
+        // does a change the handler registers for the response, which says
+        // in `x-printer` whether the resource was still open when it ran.
         .handle("receipt", ({ payload }) =>
-          Effect.map(
-            Effect.acquireRelease(
+          Effect.gen(function* () {
+            const printer = yield* Effect.acquireRelease(
               Effect.sync(() => ({ open: true })),
               (printer) =>
                 Effect.sync(() => {
                   printer.open = false;
                 }),
-            ),
-            (printer) =>
-              HttpServerResponse.stream(
-                Stream.encodeText(
-                  Stream.concat(
-                    Stream.make("receipt for "),
-                    Stream.fromEffect(
-                      Effect.flatMap(ledger.charge(payload.amount), (p) =>
-                        printer.open
-                          ? Effect.succeed(p.id)
-                          : Effect.die(new Error("The printer was closed")),
-                      ),
+            );
+            yield* HttpEffect.appendPreResponseHandler((_request, response) =>
+              Effect.succeed(
+                HttpServerResponse.setHeader(
+                  response,
+                  "x-printer",
+                  printer.open ? "open" : "closed",
+                ),
+              ),
+            );
+            return HttpServerResponse.stream(
+              Stream.encodeText(
+                Stream.concat(
+                  Stream.make("receipt for "),
+                  Stream.fromEffect(
+                    Effect.flatMap(ledger.charge(payload.amount), (p) =>
+                      printer.open
+                        ? Effect.succeed(p.id)
+                        : Effect.die(new Error("The printer was closed")),
                     ),
                   ),
                 ),
-                { contentType: "text/plain" },
               ),
-          ),
+              { contentType: "text/plain" },
+            );
+          }),
         )
         .handle("batch", ({ payload }) =>
           Effect.orDie(
@@ -296,10 +307,13 @@ const AuthenticationLive = Layer.succeed(Authentication, (httpEffect) =>
     // The rest of the request runs in a scope of its own, as it does under a
     // middleware that opens a resource per request. That scope closes before
     // the response is sent, and the idempotency middleware must not take its
-    // closing for the end of the request.
-    const response = yield* Effect.scoped(
-      Effect.provideService(httpEffect, CurrentUser, { id }),
-    );
+    // closing for the end of the request. With `x-request-scope`, it runs in
+    // the request's scope instead, as under a middleware that opens none.
+    const inner = Effect.provideService(httpEffect, CurrentUser, { id });
+    const response =
+      request.headers["x-request-scope"] === undefined
+        ? yield* Effect.scoped(inner)
+        : yield* inner;
     // Lets a test make the request fail after its handler has succeeded.
     if (request.headers["x-fail-after-handler"] !== undefined) {
       return yield* new Unauthenticated();
