@@ -1,5 +1,10 @@
-import { Effect, Stream } from "effect";
-import { HttpClientRequest, HttpServerRequest } from "effect/http";
+import { Effect, Option, Stream } from "effect";
+import {
+  HttpBody,
+  HttpClientRequest,
+  HttpServerRequest,
+  UrlParams,
+} from "effect/http";
 import * as BufferedRequest from "../../src/internal/bufferedRequest.ts";
 import { describe, expect, it } from "../support/EffectTest.ts";
 
@@ -151,6 +156,56 @@ describe("BufferedRequest of a request made from a client request", () => {
 
       expect(yield* text(request.stream)).toBe("body");
       expect(yield* text(request.stream)).toBe("body");
+    }),
+  );
+
+  /** A request made in memory whose body is a web `Request`, read once. */
+  const withRawBody = (body: string) =>
+    HttpServerRequest.fromClientRequest(
+      HttpClientRequest.post("http://localhost/payments").pipe(
+        HttpClientRequest.setBody(
+          HttpBody.raw(
+            new Request("http://localhost", { method: "POST", body }),
+          ),
+        ),
+      ),
+    );
+
+  it.effect("replays a platform body, which can be read only once", () =>
+    Effect.gen(function* () {
+      const original = withRawBody("body");
+      const bytes = yield* Effect.orDie(original.arrayBuffer);
+      const request = BufferedRequest.make(original, bytes);
+
+      expect(yield* text(request.stream)).toBe("body");
+    }),
+  );
+
+  it.effect("reads the body of a request made from it with modify", () =>
+    Effect.gen(function* () {
+      const original = withRawBody('{"amount":5}');
+      const bytes = yield* Effect.orDie(original.arrayBuffer);
+      const modified = BufferedRequest.make(original, bytes).modify({
+        url: "/elsewhere",
+      });
+
+      expect(modified.url).toBe("/elsewhere");
+      expect(yield* Effect.orDie(modified.text)).toBe('{"amount":5}');
+      expect(yield* Effect.orDie(modified.json)).toEqual({ amount: 5 });
+      expect(yield* text(modified.stream)).toBe('{"amount":5}');
+    }),
+  );
+
+  it.effect("reads form parameters of a request made from it with modify", () =>
+    Effect.gen(function* () {
+      const original = withRawBody("amount=5");
+      const bytes = yield* Effect.orDie(original.arrayBuffer);
+      const modified = BufferedRequest.make(original, bytes).modify({
+        url: "/elsewhere",
+      });
+
+      const params = yield* Effect.orDie(modified.urlParamsBody);
+      expect(UrlParams.getFirst(params, "amount")).toEqual(Option.some("5"));
     }),
   );
 });

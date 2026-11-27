@@ -21,22 +21,31 @@ import {
  * adds of its own, such as Bun's `source`, is the original request's.
  *
  * A request made in memory from a client request, as `HttpApiTest` and
- * `HttpServerRequest.fromClientRequest` make, reads its body again each time,
- * unless the body is a stream, and is returned as it is. Its form data in
- * particular is parsed from the `FormData` itself: read as bytes, a form is
- * encoded with a boundary its headers do not name.
+ * `HttpServerRequest.fromClientRequest` make, is returned as it is when its
+ * body can be read again: none, bytes or a `FormData`. Its form data in
+ * particular is parsed from the `FormData` itself, since read as bytes a form
+ * is encoded with a boundary its headers do not name. A stream or a platform
+ * body can be read once only, so that request is wrapped too.
  */
 export const make = (
   request: HttpServerRequest.HttpServerRequest,
   body: ArrayBuffer,
 ): HttpServerRequest.HttpServerRequest =>
-  HttpClientRequest.isHttpClientRequest(request.source) &&
-  request.source.body._tag !== "Stream"
-    ? request
-    : replaying(request, body);
+  readsAgain(request) ? request : replaying(request, request, body);
 
+const readsAgain = (request: HttpServerRequest.HttpServerRequest): boolean => {
+  if (!HttpClientRequest.isHttpClientRequest(request.source)) return false;
+  const tag = request.source.body._tag;
+  return tag === "Empty" || tag === "Uint8Array" || tag === "FormData";
+};
+
+/**
+ * `request`, with its body read from `body`. `cached` is the request the
+ * middleware read the body of, which keeps it in its cache.
+ */
 const replaying = (
   request: HttpServerRequest.HttpServerRequest,
+  cached: HttpServerRequest.HttpServerRequest,
   body: ArrayBuffer,
 ): HttpServerRequest.HttpServerRequest => {
   const stream = (): Stream.Stream<Uint8Array> =>
@@ -64,17 +73,23 @@ const replaying = (
             Effect.cached(Multipart.toPersisted(multipartStream())),
           );
           return multipart;
+        // These read the body through the cache of the request that was
+        // read. A request made with `modify` starts with an empty cache of
+        // its own, and would read a body that is used up.
+        case "text":
+        case "json":
+        case "urlParamsBody":
+          return Reflect.get(cached, property, cached) as unknown;
         // A request made from this one keeps the body.
         case "modify":
           return (
             options: Parameters<
               HttpServerRequest.HttpServerRequest["modify"]
             >[0],
-          ) => make(target.modify(options), body);
+          ) => replaying(target.modify(options), cached, body);
         default:
-          // With the proxy as `this`, the original's `text`, `json` and
-          // `urlParamsBody` read `arrayBuffer` above. A proxy hands values on
-          // whatever their type, so `unknown` says no more than it knows.
+          // A proxy hands values on whatever their type, so `unknown` says no
+          // more than it knows.
           return Reflect.get(target, property, receiver) as unknown;
       }
     },
