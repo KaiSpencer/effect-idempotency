@@ -56,8 +56,11 @@ with the same key.
 `409`, `IdempotencyKeyInProgress`. The first request with this key is still
 running.
 
-**Fix:** retry after a short wait. The retry gets the stored response once the
-first request has finished.
+**Fix:** retry after a short wait. Once the first request has finished, and a
+streamed response has ended, the retry gets the stored response. If the first
+response was not stored, because it failed, was over `maxStoredBytes`, or was
+a stream given up after its client left, the retry runs the handler again: see
+[What is stored](/behaviour/stored-responses#what-is-not-stored).
 
 ## Handling them in a client
 

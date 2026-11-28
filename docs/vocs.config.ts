@@ -95,6 +95,7 @@ export default defineConfig({
         { text: "The key", link: "/behaviour/key" },
         { text: "Scope", link: "/behaviour/scope" },
         { text: "What is stored", link: "/behaviour/stored-responses" },
+        { text: "Streams and uploads", link: "/behaviour/streams" },
         { text: "Disconnects and failures", link: "/behaviour/failures" },
         { text: "Limits", link: "/behaviour/limits" },
       ],

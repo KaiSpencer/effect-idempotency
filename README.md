@@ -58,6 +58,28 @@ back, with `Idempotent-Replayed: true`.
 [Getting started](https://effect-idempotency.vercel.app/getting-started) has
 the whole program: the API, the server and a client that retries.
 
+## Streams and uploads
+
+- **Streamed responses** are sent as they are read and stored once the stream
+  has ended. A retry gets `409` until then. If the client leaves part way, the
+  middleware reads the stream to the end and stores it for the retry, unless
+  the stream goes over `maxStoredBytes` or outlasts `lockExpiry`: then it
+  stops reading and releases the key. If the stream fails, the key is
+  released. In each of these cases a retry runs the handler again, and its
+  side effects with it.
+- **Stream and multipart payloads** are read whole before the handler runs,
+  so that the body is part of what makes two requests the same, and the
+  handler reads them from memory. Annotate an endpoint with
+  `Idempotency.FingerprintBody` set to `false` to stream its body to the
+  handler instead: the fingerprint then compares the `Content-Digest` and
+  `Repr-Digest` headers in its place.
+- **The size limit**, `maxStoredBytes`, is 1 MiB by default. A larger
+  response is sent whole but not stored, and its key is released, so a retry
+  runs the handler again.
+
+[Streams and uploads](https://effect-idempotency.vercel.app/behaviour/streams)
+has the details.
+
 ## Documentation
 
 - [Getting started](https://effect-idempotency.vercel.app/getting-started):

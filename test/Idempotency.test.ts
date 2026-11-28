@@ -50,6 +50,30 @@ const create = (
   );
 };
 
+/** A receipt, which the handler streams, as `alice` with the key `k1`. */
+const receipt = (amount: number) =>
+  Effect.flatMap(client, (api) =>
+    api.payments.receipt({
+      payload: { amount },
+      headers: {
+        "x-user": "alice",
+        "idempotency-key": IdempotencyKey.IdempotencyKey.make("k1"),
+      },
+    }),
+  );
+
+/**
+ * A receipt once the one before it has ended. A streamed response is stored
+ * when the middleware has read it to the end, which can be just after the
+ * client has.
+ */
+const receiptOnceSettled = (amount: number) =>
+  receipt(amount).pipe(
+    Effect.retry({
+      while: (error) => error._tag === "IdempotencyKeyInProgress",
+    }),
+  );
+
 const charges = Effect.flatMap(Payments.Ledger, (ledger) => ledger.charges);
 
 /**
@@ -212,6 +236,20 @@ describe("Idempotency", () => {
       expect((yield* create(5, { user: "alice" })).id).toBe("pay_1");
     }));
 
+  test("stores a streamed response once it has ended, and replays it", () =>
+    Effect.gen(function* () {
+      expect(yield* receipt(5)).toBe("receipt for pay_1");
+      expect(yield* receiptOnceSettled(5)).toBe("receipt for pay_1");
+      expect(yield* charges).toBe(1);
+    }));
+
+  test("releases the key of a streamed response that fails", () =>
+    Effect.gen(function* () {
+      expect((yield* Effect.exit(receipt(-1)))._tag).toBe("Failure");
+      expect((yield* Effect.exit(receiptOnceSettled(-1)))._tag).toBe("Failure");
+      expect(yield* charges).toBe(2);
+    }));
+
   test("runs inside the middleware added after it", () =>
     Effect.gen(function* () {
       const api = yield* client;
@@ -275,6 +313,48 @@ describe("Idempotency options", () => {
           }),
         ),
       ),
+  );
+});
+
+describe("Idempotency maxStoredBytes", () => {
+  // `{"id":"pay_1","amount":5}` is 25 bytes, `receipt for pay_1` 17.
+  const withLimit = (maxStoredBytes: number) =>
+    Effect.provide(
+      environment(IdempotencyStore.layerMemory, { maxStoredBytes }),
+    );
+
+  it.effect("stores a response of exactly the limit", () =>
+    Effect.gen(function* () {
+      yield* create(5);
+      expect((yield* create(5)).id).toBe("pay_1");
+      expect(yield* charges).toBe(1);
+    }).pipe(withLimit(25)),
+  );
+
+  it.effect(
+    "sends a response over the limit without storing it, and releases its key",
+    () =>
+      Effect.gen(function* () {
+        expect((yield* create(5)).id).toBe("pay_1");
+        expect((yield* create(5)).id).toBe("pay_2");
+      }).pipe(withLimit(24)),
+  );
+
+  it.effect("stores a streamed response of exactly the limit", () =>
+    Effect.gen(function* () {
+      yield* receipt(5);
+      expect(yield* receiptOnceSettled(5)).toBe("receipt for pay_1");
+      expect(yield* charges).toBe(1);
+    }).pipe(withLimit(17)),
+  );
+
+  it.effect(
+    "sends a streamed response over the limit whole, and releases its key",
+    () =>
+      Effect.gen(function* () {
+        expect(yield* receipt(5)).toBe("receipt for pay_1");
+        expect(yield* receiptOnceSettled(5)).toBe("receipt for pay_2");
+      }).pipe(withLimit(16)),
   );
 });
 

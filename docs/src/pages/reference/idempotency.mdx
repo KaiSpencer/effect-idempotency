@@ -4,14 +4,15 @@
 import { Idempotency } from "effect-idempotency";
 ```
 
-| Export                              | Kind      | What it is                                        |
-| ----------------------------------- | --------- | ------------------------------------------------- |
-| [`Service`](#service)               | Function  | Declares an idempotency middleware class.         |
-| [`layer`](#layer)                   | Function  | Provides a middleware declared with `Service`.    |
-| [`Options`](#options)               | Interface | The options of `layer`.                           |
-| [`errors`](#errors)                 | Constant  | The errors every idempotency middleware declares. |
-| [`Errors`](#errors)                 | Type      | The type of `errors`.                             |
-| [`replayedHeader`](#replayedheader) | Constant  | The header a replayed response carries.           |
+| Export                                | Kind       | What it is                                             |
+| ------------------------------------- | ---------- | ------------------------------------------------------ |
+| [`Service`](#service)                 | Function   | Declares an idempotency middleware class.              |
+| [`layer`](#layer)                     | Function   | Provides a middleware declared with `Service`.         |
+| [`Options`](#options)                 | Interface  | The options of `layer`.                                |
+| [`FingerprintBody`](#fingerprintbody) | Annotation | Whether an endpoint's body is part of its fingerprint. |
+| [`errors`](#errors)                   | Constant   | The errors every idempotency middleware declares.      |
+| [`Errors`](#errors)                   | Type       | The type of `errors`.                                  |
+| [`replayedHeader`](#replayedheader)   | Constant   | The header a replayed response carries.                |
 
 ## Service
 
@@ -78,10 +79,10 @@ const PaymentIdempotencyLive = Idempotency.layer(PaymentIdempotency, {
 
 **Arguments**
 
-| Argument  | Type                   | Description                                   |
-| --------- | ---------------------- | --------------------------------------------- |
-| `service` | A class from `Service` | The middleware to provide.                    |
-| `options` | [`Options`](#options)  | The scope, the retention and the lock expiry. |
+| Argument  | Type                   | Description                                                          |
+| --------- | ---------------------- | -------------------------------------------------------------------- |
+| `service` | A class from `Service` | The middleware to provide.                                           |
+| `options` | [`Options`](#options)  | The scope, the retention, the lock expiry and the stored size limit. |
 
 **Returns** `Layer.Layer<Id, never, IdempotencyStore>`, where `Id` is the
 middleware class.
@@ -93,11 +94,12 @@ For each request the middleware reads the key and claims it in the store.
 
 The options of [`layer`](#layer).
 
-| Option       | Type                              | Default       | Description                                                                |
-| ------------ | --------------------------------- | ------------- | -------------------------------------------------------------------------- |
-| `scope`      | `Effect.Effect<string, never, R>` | Required      | Who a key belongs to, read once per request. `R` is what `requires` names. |
-| `retention`  | `Duration.Input`                  | `"24 hours"`  | How long a stored response is replayed.                                    |
-| `lockExpiry` | `Duration.Input`                  | `"5 minutes"` | How long a request may hold a key before another request may take it.      |
+| Option           | Type                              | Default       | Description                                                                |
+| ---------------- | --------------------------------- | ------------- | -------------------------------------------------------------------------- |
+| `scope`          | `Effect.Effect<string, never, R>` | Required      | Who a key belongs to, read once per request. `R` is what `requires` names. |
+| `retention`      | `Duration.Input`                  | `"24 hours"`  | How long a stored response is replayed.                                    |
+| `lockExpiry`     | `Duration.Input`                  | `"5 minutes"` | How long a request may hold a key before another request may take it.      |
+| `maxStoredBytes` | `ByteSize.Input`                  | `"1 MiB"`     | The largest response body that is stored.                                  |
 
 - **`scope`**: a key is unique within its scope, so two callers that send the
   same key do not see each other's responses. Return the caller's id on an API
@@ -105,12 +107,49 @@ The options of [`layer`](#layer).
 - **`retention`**: counted from when the handler finished. After it the key is
   new. See [What is stored](/behaviour/stored-responses).
 - **`lockExpiry`**: it frees the key of a process that died mid-request. It
-  counts for a request that is still running too, so make it longer than the
-  slowest handler. See
+  counts for a request that is still running too, streamed response included,
+  so make it longer than the slowest handler. See
   [Disconnects and failures](/behaviour/failures#a-process-that-dies).
+- **`maxStoredBytes`**: a larger response is sent whole but not stored, and its
+  key is released, so a retry runs the handler again. It applies to streamed
+  responses too, and bounds the memory their copy takes. See
+  [Streams and uploads](/behaviour/streams#the-size-limit).
 
 A `Duration.Input` is, for example, a `Duration`, a number of milliseconds, or
-a string such as `"30 seconds"`.
+a string such as `"30 seconds"`. A `ByteSize.Input` is, for example, a number
+of bytes, or a string such as `"512 KiB"` or `"10 MiB"`.
+
+## FingerprintBody
+
+An endpoint annotation: whether the body is part of what makes two requests
+the same request. It is `true` unless an endpoint, or its group, says
+otherwise.
+
+```ts twoslash
+// @filename: Api.ts
+// [!include ~/snippets/Api.ts]
+
+// @filename: Upload.ts
+import { Schema } from "effect";
+import { HttpApiEndpoint, HttpApiSchema } from "effect/http-api";
+import { Idempotency, IdempotencyKey } from "effect-idempotency";
+import { PaymentIdempotency } from "./Api.ts";
+// ---cut---
+const upload = HttpApiEndpoint.post("upload", "/receipts", {
+  headers: Schema.Struct({ "idempotency-key": IdempotencyKey.FromHeader }),
+  payload: HttpApiSchema.StreamUint8Array(),
+  success: Schema.Struct({ id: Schema.String }),
+})
+  .middleware(PaymentIdempotency)
+  .annotate(Idempotency.FingerprintBody, false);
+```
+
+| Value   | The middleware                                                                                                          |
+| ------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `true`  | Reads the whole body before the handler, and compares it byte for byte. The handler reads the body from memory.         |
+| `false` | Leaves the body for the handler to stream. Compares the method, path, query string, `Content-Digest` and `Repr-Digest`. |
+
+See [Streams and uploads](/behaviour/streams#leaving-the-body-out-of-the-fingerprint).
 
 ## errors
 

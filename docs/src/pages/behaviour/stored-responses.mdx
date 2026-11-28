@@ -7,7 +7,8 @@ the key of one that did not.
 
 A response with a status below `400` is stored whole: status, headers, cookies
 and body. It is kept for `retention`, 24 hours by default, counted from when
-the handler finished. After that the key is new.
+the handler finished, or from when a streamed response ended. After that the
+key is new.
 
 ```ts twoslash
 // @filename: Api.ts
@@ -32,7 +33,13 @@ Nothing is stored and the key is released when:
 - the handler dies,
 - the handler answers `400` or above,
 - the request is refused before the handler, as one that fails validation or
-  has an unsupported content type is.
+  has an unsupported content type is,
+- the response body is over `maxStoredBytes`, 1 MiB by default,
+- the response body is a file or form data,
+- the response body is a stream, and the stream fails,
+- the response body is a stream whose client has gone, and the middleware
+  gives it up: see
+  [A stream nobody reads](/behaviour/streams#a-stream-nobody-reads).
 
 The next request with the key runs the handler again.
 
@@ -42,8 +49,9 @@ run can repeat. The key does not protect a side effect that happened before
 the failure.
 :::
 
-A response whose body is not bytes in memory, such as a stream, a file or
-form data, is sent but not stored: see [Limits](/behaviour/limits).
+A response whose body is a stream is stored once the stream has ended, and a
+retry is answered `409` until then. See
+[Streams and uploads](/behaviour/streams) for streams and the size limit.
 
 ## Changes made to the response after the handler
 
